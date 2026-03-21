@@ -19,10 +19,14 @@ export const serializeUser = (user) => {
   const level = getLevelFromPointsLocal(user.points || 0);
 
   return {
+    _id: user._id,
     id: user._id,
     name: user.name,
     email: user.email,
     avatarUrl: user.avatarUrl,
+    age: user.age,
+    occupation: user.occupation,
+    goal: user.goal,
     points: user.points,
     streakCount: user.streakCount,
     longestStreak: user.longestStreak,

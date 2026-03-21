@@ -1,11 +1,14 @@
 import UserSettings from "../models/UserSettings.js";
 import AppLimit from "../models/AppLimit.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { ApiError } from "../utils/ApiError.js";
 import { serializeUser } from "../utils/serialize.js";
 
 export const getSettings = asyncHandler(async (req, res) => {
   const settings = await UserSettings.findOne({ user: req.user._id });
-  const appLimits = await AppLimit.find({ user: req.user._id }).sort({ createdAt: -1 });
+  const appLimits = await AppLimit.find({ user: req.user._id }).sort({
+    createdAt: -1,
+  });
 
   res.json({
     success: true,
@@ -35,30 +38,35 @@ export const updateSettings = asyncHandler(async (req, res) => {
 
   if (dailyLimitMinutes !== undefined) settings.dailyLimitMinutes = dailyLimitMinutes;
   if (focusAreas !== undefined) settings.focusAreas = focusAreas;
+
   if (sleepSchedule !== undefined) {
     settings.sleepSchedule = {
       ...settings.sleepSchedule,
       ...sleepSchedule,
     };
   }
+
   if (notificationSettings !== undefined) {
     settings.notificationSettings = {
       ...settings.notificationSettings,
       ...notificationSettings,
     };
   }
+
   if (privacySettings !== undefined) {
     settings.privacySettings = {
       ...settings.privacySettings,
       ...privacySettings,
     };
   }
+
   if (integrations !== undefined) {
     settings.integrations = {
       ...settings.integrations,
       ...integrations,
     };
   }
+
   if (theme !== undefined) settings.theme = theme;
 
   await req.user.save();
@@ -76,6 +84,10 @@ export const completeProfileSetup = asyncHandler(async (req, res) => {
   const settings = await UserSettings.findOne({ user: req.user._id });
 
   const {
+    name,
+    age,
+    occupation,
+    goal,
     dailyLimitMinutes,
     focusAreas,
     bedTime,
@@ -83,7 +95,18 @@ export const completeProfileSetup = asyncHandler(async (req, res) => {
     notificationSettings,
   } = req.body;
 
-  if (dailyLimitMinutes !== undefined) settings.dailyLimitMinutes = dailyLimitMinutes;
+  if (name !== undefined && String(name).trim()) {
+    req.user.name = String(name).trim();
+  }
+
+  if (age !== undefined) req.user.age = Number(age);
+  if (occupation !== undefined) req.user.occupation = String(occupation).trim();
+  if (goal !== undefined) req.user.goal = String(goal).trim();
+
+  if (dailyLimitMinutes !== undefined) {
+    settings.dailyLimitMinutes = Number(dailyLimitMinutes);
+  }
+
   if (focusAreas !== undefined) settings.focusAreas = focusAreas;
 
   if (bedTime !== undefined || wakeTime !== undefined) {
@@ -115,6 +138,13 @@ export const completeProfileSetup = asyncHandler(async (req, res) => {
 
 export const saveAppLimit = asyncHandler(async (req, res) => {
   const { appName, appPackage, category, dailyLimitMinutes } = req.body;
+
+  if (!appName || !appPackage || !dailyLimitMinutes) {
+    throw new ApiError(
+      400,
+      "appName, appPackage, and dailyLimitMinutes are required."
+    );
+  }
 
   const limit = await AppLimit.findOneAndUpdate(
     { user: req.user._id, appPackage },

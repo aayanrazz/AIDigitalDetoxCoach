@@ -36,6 +36,22 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    age: {
+      type: Number,
+      min: 1,
+      max: 120,
+      default: null,
+    },
+    occupation: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    goal: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     points: {
       type: Number,
       default: 0,
