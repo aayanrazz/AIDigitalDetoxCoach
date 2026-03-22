@@ -9,7 +9,11 @@ import { analyzeDailyUsage } from "../services/behavior.service.js";
 import { buildAnalytics } from "../services/analytics.service.js";
 
 export const getDashboard = asyncHandler(async (req, res) => {
-  const settings = await UserSettings.findOne({ user: req.user._id });
+  let settings = await UserSettings.findOne({ user: req.user._id });
+
+  if (!settings) {
+    settings = await UserSettings.create({ user: req.user._id });
+  }
 
   const todayKey = formatDayKey();
   const todaySessions = await UsageSession.find({
@@ -73,6 +77,8 @@ export const getDashboard = asyncHandler(async (req, res) => {
       ?.find((day) => day.status !== "completed")
       ?.tasks?.find((task) => task.status !== "completed") || null;
 
+  const focusAreas = settings?.focusAreas || [];
+
   res.json({
     success: true,
     dashboard: {
@@ -83,10 +89,10 @@ export const getDashboard = asyncHandler(async (req, res) => {
       unlocks: todayAnalysis.unlocks,
       streak: req.user.streakCount,
       todayScreenTime: todayAnalysis.totalScreenMinutes,
-      dailyGoal: settings.dailyLimitMinutes,
+      dailyGoal: settings?.dailyLimitMinutes ?? 180,
       dailyChallenge:
         pendingTask?.title ||
-        (settings.focusAreas.includes("Social Media")
+        (focusAreas.includes("Social Media")
           ? "No Social Media until 12PM"
           : "Take a nature break"),
       aiRecommendations: todayAnalysis.recommendations,
