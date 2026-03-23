@@ -10,12 +10,31 @@ import { buildAnalytics } from "../services/analytics.service.js";
 import { buildDetoxPlan } from "../services/detoxPlan.service.js";
 import {
   syncBadges,
-  getLevelFromPoints,
+  getLevelProgressFromPoints,
 } from "../services/gamification.service.js";
 import { serializeUser } from "../utils/serialize.js";
 
+async function ensureSettings(userId) {
+  let settings = await UserSettings.findOne({ user: userId });
+
+  if (!settings) {
+    settings = await UserSettings.create({ user: userId });
+  }
+
+  return settings;
+}
+
+function getTaskPointValue(type = "habit") {
+  if (type === "restriction") return 30;
+  if (type === "limit") return 25;
+  if (type === "sleep") return 20;
+  if (type === "wellness") return 20;
+  if (type === "reflection") return 15;
+  return 15;
+}
+
 export const generateDetoxPlan = asyncHandler(async (req, res) => {
-  const settings = await UserSettings.findOne({ user: req.user._id });
+  const settings = await ensureSettings(req.user._id);
 
   const sessions = await UsageSession.find({
     user: req.user._id,
@@ -44,7 +63,7 @@ export const generateDetoxPlan = asyncHandler(async (req, res) => {
     user: req.user._id,
     type: "summary",
     title: "New detox plan generated",
-    body: "Your personalized 21-day detox plan is ready.",
+    body: "Your personalized detox plan is ready. Start with today's focus tasks.",
     cta: {
       label: "VIEW PLAN",
       action: "open_detox_plan",
@@ -81,31 +100,38 @@ export const completePlanTask = asyncHandler(async (req, res) => {
   }
 
   let targetDay = null;
-  let task = null;
+  let targetTask = null;
 
   for (const day of plan.days) {
     const foundTask = day.tasks.id(req.params.taskId);
     if (foundTask) {
       targetDay = day;
-      task = foundTask;
+      targetTask = foundTask;
       break;
     }
   }
 
-  if (!task || !targetDay) {
+  if (!targetTask || !targetDay) {
     throw new ApiError(404, "Task not found.");
   }
 
-  if (task.status === "completed") {
+  if (targetTask.status === "completed") {
     throw new ApiError(400, "Task already completed.");
   }
 
-  task.status = "completed";
-  task.completedAt = new Date();
+  targetTask.status = "completed";
+  targetTask.completedAt = new Date();
 
-  const allCompleted = targetDay.tasks.every((t) => t.status === "completed");
-  if (allCompleted) {
+  const basePoints = getTaskPointValue(targetTask.type);
+  req.user.points += basePoints;
+
+  const allCompletedForDay = targetDay.tasks.every(
+    (task) => task.status === "completed"
+  );
+
+  if (allCompletedForDay) {
     targetDay.status = "completed";
+    req.user.points += 40;
 
     const todayKey = formatDayKey();
     const yesterdayKey = formatDayKey(addDays(new Date(), -1));
@@ -121,14 +147,73 @@ export const completePlanTask = asyncHandler(async (req, res) => {
       }
 
       req.user.longestStreak = Math.max(
-        req.user.longestStreak,
-        req.user.streakCount
+        req.user.longestStreak || 0,
+        req.user.streakCount || 0
       );
       req.user.lastStreakDate = new Date();
     }
+
+    const nextPendingDay = plan.days.find((day) => day.status === "pending");
+    if (nextPendingDay) {
+      nextPendingDay.status = "in_progress";
+      if (nextPendingDay.tasks?.length) {
+        const nextOpenTask = nextPendingDay.tasks.find(
+          (task) => task.status !== "completed"
+        );
+        if (nextOpenTask && nextOpenTask.status === "pending") {
+          nextOpenTask.status = "in_progress";
+        }
+      }
+    }
+
+    await RewardLedger.create({
+      user: req.user._id,
+      type: "earn",
+      points: 40,
+      title: "Day completed",
+      description: `Completed day ${targetDay.dayNumber} of your detox plan.`,
+    });
+
+    await Notification.create({
+      user: req.user._id,
+      type: "summary",
+      title: "Daily detox goal completed",
+      body: `Excellent work. You completed day ${targetDay.dayNumber} of your detox plan.`,
+      cta: {
+        label: "VIEW REWARDS",
+        action: "open_rewards",
+      },
+    });
+  } else {
+    targetDay.status = "in_progress";
   }
 
-  req.user.points += 25;
+  const allPlanDaysCompleted = plan.days.every((day) => day.status === "completed");
+
+  if (allPlanDaysCompleted && plan.active) {
+    plan.active = false;
+    req.user.points += 250;
+
+    await RewardLedger.create({
+      user: req.user._id,
+      type: "earn",
+      points: 250,
+      title: "Plan completed",
+      description: `Completed the full ${plan.durationDays}-day detox plan.`,
+    });
+
+    await Notification.create({
+      user: req.user._id,
+      type: "achievement",
+      title: "Detox plan completed",
+      body: "You completed your full detox plan. Amazing consistency.",
+      cta: {
+        label: "VIEW REWARDS",
+        action: "open_rewards",
+      },
+    });
+  }
+
   const newBadges = syncBadges(req.user);
 
   await req.user.save();
@@ -137,9 +222,9 @@ export const completePlanTask = asyncHandler(async (req, res) => {
   await RewardLedger.create({
     user: req.user._id,
     type: "earn",
-    points: 25,
+    points: basePoints,
     title: "Task completed",
-    description: `Completed: ${task.title}`,
+    description: `Completed: ${targetTask.title}`,
   });
 
   if (newBadges.length > 0) {
@@ -149,11 +234,13 @@ export const completePlanTask = asyncHandler(async (req, res) => {
       title: "New badge unlocked",
       body: `You unlocked: ${newBadges.join(", ")}`,
       cta: {
-        label: "VIEW BADGES",
+        label: "VIEW REWARDS",
         action: "open_rewards",
       },
     });
   }
+
+  const levelProgress = getLevelProgressFromPoints(req.user.points);
 
   res.json({
     success: true,
@@ -161,7 +248,10 @@ export const completePlanTask = asyncHandler(async (req, res) => {
     plan,
     user: {
       ...serializeUser(req.user),
-      level: getLevelFromPoints(req.user.points),
+      level: levelProgress.level,
+      nextLevel: levelProgress.nextLevel,
+      progressPct: levelProgress.progressPct,
+      pointsToNextLevel: levelProgress.pointsToNextLevel,
     },
     newBadges,
   });
