@@ -4,8 +4,26 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { serializeUser } from "../utils/serialize.js";
 
+async function ensureSettings(userId) {
+  let settings = await UserSettings.findOne({ user: userId });
+
+  if (!settings) {
+    settings = await UserSettings.create({ user: userId });
+  }
+
+  return settings;
+}
+
+function normalizeFocusAreas(value) {
+  if (!Array.isArray(value)) return undefined;
+
+  return value
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
 export const getSettings = asyncHandler(async (req, res) => {
-  const settings = await UserSettings.findOne({ user: req.user._id });
+  const settings = await ensureSettings(req.user._id);
   const appLimits = await AppLimit.find({ user: req.user._id }).sort({
     createdAt: -1,
   });
@@ -19,7 +37,7 @@ export const getSettings = asyncHandler(async (req, res) => {
 });
 
 export const updateSettings = asyncHandler(async (req, res) => {
-  const settings = await UserSettings.findOne({ user: req.user._id });
+  const settings = await ensureSettings(req.user._id);
 
   const {
     name,
@@ -33,16 +51,28 @@ export const updateSettings = asyncHandler(async (req, res) => {
     theme,
   } = req.body;
 
-  if (name !== undefined) req.user.name = name;
-  if (avatarUrl !== undefined) req.user.avatarUrl = avatarUrl;
+  if (name !== undefined) req.user.name = String(name).trim();
+  if (avatarUrl !== undefined) req.user.avatarUrl = String(avatarUrl).trim();
 
-  if (dailyLimitMinutes !== undefined) settings.dailyLimitMinutes = dailyLimitMinutes;
-  if (focusAreas !== undefined) settings.focusAreas = focusAreas;
+  if (dailyLimitMinutes !== undefined) {
+    settings.dailyLimitMinutes = Number(dailyLimitMinutes);
+  }
+
+  const normalizedFocusAreas = normalizeFocusAreas(focusAreas);
+  if (normalizedFocusAreas !== undefined) {
+    settings.focusAreas = normalizedFocusAreas;
+  }
 
   if (sleepSchedule !== undefined) {
     settings.sleepSchedule = {
-      ...settings.sleepSchedule,
-      ...sleepSchedule,
+      bedTime:
+        sleepSchedule?.bedTime !== undefined
+          ? String(sleepSchedule.bedTime)
+          : settings.sleepSchedule.bedTime,
+      wakeTime:
+        sleepSchedule?.wakeTime !== undefined
+          ? String(sleepSchedule.wakeTime)
+          : settings.sleepSchedule.wakeTime,
     };
   }
 
@@ -67,21 +97,28 @@ export const updateSettings = asyncHandler(async (req, res) => {
     };
   }
 
-  if (theme !== undefined) settings.theme = theme;
+  if (theme !== undefined) {
+    settings.theme = theme;
+  }
 
   await req.user.save();
   await settings.save();
+
+  const appLimits = await AppLimit.find({ user: req.user._id }).sort({
+    createdAt: -1,
+  });
 
   res.json({
     success: true,
     message: "Settings updated successfully.",
     user: serializeUser(req.user),
     settings,
+    appLimits,
   });
 });
 
 export const completeProfileSetup = asyncHandler(async (req, res) => {
-  const settings = await UserSettings.findOne({ user: req.user._id });
+  const settings = await ensureSettings(req.user._id);
 
   const {
     name,
@@ -99,20 +136,35 @@ export const completeProfileSetup = asyncHandler(async (req, res) => {
     req.user.name = String(name).trim();
   }
 
-  if (age !== undefined) req.user.age = Number(age);
-  if (occupation !== undefined) req.user.occupation = String(occupation).trim();
-  if (goal !== undefined) req.user.goal = String(goal).trim();
+  if (age !== undefined && age !== null && age !== "") {
+    req.user.age = Number(age);
+  }
+
+  if (occupation !== undefined) {
+    req.user.occupation = String(occupation).trim();
+  }
+
+  if (goal !== undefined) {
+    req.user.goal = String(goal).trim();
+  }
 
   if (dailyLimitMinutes !== undefined) {
     settings.dailyLimitMinutes = Number(dailyLimitMinutes);
   }
 
-  if (focusAreas !== undefined) settings.focusAreas = focusAreas;
+  const normalizedFocusAreas = normalizeFocusAreas(focusAreas);
+  if (normalizedFocusAreas !== undefined) {
+    settings.focusAreas = normalizedFocusAreas;
+  }
 
   if (bedTime !== undefined || wakeTime !== undefined) {
     settings.sleepSchedule = {
-      bedTime: bedTime || settings.sleepSchedule.bedTime,
-      wakeTime: wakeTime || settings.sleepSchedule.wakeTime,
+      bedTime:
+        bedTime !== undefined ? String(bedTime) : settings.sleepSchedule.bedTime,
+      wakeTime:
+        wakeTime !== undefined
+          ? String(wakeTime)
+          : settings.sleepSchedule.wakeTime,
     };
   }
 
@@ -139,21 +191,27 @@ export const completeProfileSetup = asyncHandler(async (req, res) => {
 export const saveAppLimit = asyncHandler(async (req, res) => {
   const { appName, appPackage, category, dailyLimitMinutes } = req.body;
 
-  if (!appName || !appPackage || !dailyLimitMinutes) {
+  if (!appName || !appPackage || dailyLimitMinutes === undefined) {
     throw new ApiError(
       400,
       "appName, appPackage, and dailyLimitMinutes are required."
     );
   }
 
+  const normalizedLimit = Number(dailyLimitMinutes);
+
+  if (!Number.isFinite(normalizedLimit) || normalizedLimit <= 0) {
+    throw new ApiError(400, "dailyLimitMinutes must be a valid positive number.");
+  }
+
   const limit = await AppLimit.findOneAndUpdate(
-    { user: req.user._id, appPackage },
+    { user: req.user._id, appPackage: String(appPackage).trim() },
     {
       user: req.user._id,
-      appName,
-      appPackage,
-      category,
-      dailyLimitMinutes,
+      appName: String(appName).trim(),
+      appPackage: String(appPackage).trim(),
+      category: category ? String(category).trim() : "Other",
+      dailyLimitMinutes: normalizedLimit,
     },
     {
       new: true,

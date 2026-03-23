@@ -7,6 +7,50 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { formatDayKey } from "../utils/date.js";
 import { analyzeDailyUsage } from "../services/behavior.service.js";
 
+function normalizeSession(userId, session) {
+  const startTime = new Date(session.startTime);
+  const endTime = new Date(session.endTime);
+
+  if (Number.isNaN(startTime.getTime()) || Number.isNaN(endTime.getTime())) {
+    throw new ApiError(400, "Invalid startTime or endTime in session payload.");
+  }
+
+  if (!session.appName || !session.appPackage) {
+    throw new ApiError(400, "Each session must include appName and appPackage.");
+  }
+
+  const durationMinutes = Math.max(0, Number(session.durationMinutes || 0));
+  const pickups = Math.max(0, Number(session.pickups || 0));
+  const unlocks = Math.max(0, Number(session.unlocks || 0));
+  const dayKey = session.dayKey || formatDayKey(startTime);
+
+  return {
+    user: userId,
+    appName: String(session.appName).trim(),
+    appPackage: String(session.appPackage).trim(),
+    category: String(session.category || "Other").trim(),
+    durationMinutes,
+    pickups,
+    unlocks,
+    startTime,
+    endTime,
+    platform: session.platform || "android",
+    source: session.source || "native_bridge",
+    dayKey,
+    hourBucket: startTime.getHours(),
+  };
+}
+
+async function ensureUserSettings(userId) {
+  let settings = await UserSettings.findOne({ user: userId });
+
+  if (!settings) {
+    settings = await UserSettings.create({ user: userId });
+  }
+
+  return settings;
+}
+
 export const ingestUsage = asyncHandler(async (req, res) => {
   const { sessions } = req.body;
 
@@ -14,36 +58,37 @@ export const ingestUsage = asyncHandler(async (req, res) => {
     throw new ApiError(400, "sessions array is required.");
   }
 
-  const prepared = sessions.map((session) => {
-    const startTime = new Date(session.startTime);
-    const endTime = new Date(session.endTime);
+  const normalized = sessions.map((session) =>
+    normalizeSession(req.user._id, session)
+  );
 
-    return {
-      user: req.user._id,
-      appName: session.appName,
-      appPackage: session.appPackage,
-      category: session.category || "Other",
-      durationMinutes: Number(session.durationMinutes || 0),
-      pickups: Number(session.pickups || 0),
-      unlocks: Number(session.unlocks || 0),
-      startTime,
-      endTime,
-      platform: session.platform || "android",
-      source: session.source || "native_bridge",
-      dayKey: formatDayKey(startTime),
-      hourBucket: startTime.getHours(),
-    };
-  });
+  const operations = normalized.map((session) => ({
+    updateOne: {
+      filter: {
+        user: req.user._id,
+        dayKey: session.dayKey,
+        appPackage: session.appPackage,
+        source: session.source,
+      },
+      update: {
+        $set: session,
+      },
+      upsert: true,
+    },
+  }));
 
-  await UsageSession.insertMany(prepared);
+  if (operations.length > 0) {
+    await UsageSession.bulkWrite(operations, { ordered: false });
+  }
 
   const todayKey = formatDayKey();
+
   const todaySessions = await UsageSession.find({
     user: req.user._id,
     dayKey: todayKey,
-  });
+  }).sort({ durationMinutes: -1 });
 
-  const settings = await UserSettings.findOne({ user: req.user._id });
+  const settings = await ensureUserSettings(req.user._id);
   const analysis = analyzeDailyUsage({ sessions: todaySessions, settings });
 
   await AiInsight.findOneAndUpdate(
@@ -90,9 +135,10 @@ export const ingestUsage = asyncHandler(async (req, res) => {
 
   res.status(201).json({
     success: true,
-    message: "Usage sessions ingested successfully.",
-    createdCount: prepared.length,
+    message: "Usage sessions synced successfully.",
+    syncedCount: normalized.length,
     analysis,
+    topApps: todaySessions.slice(0, 5),
   });
 });
 
@@ -102,7 +148,7 @@ export const getTodayUsage = asyncHandler(async (req, res) => {
   const sessions = await UsageSession.find({
     user: req.user._id,
     dayKey: todayKey,
-  }).sort({ startTime: -1 });
+  }).sort({ durationMinutes: -1 });
 
   const aiInsight = await AiInsight.findOne({
     user: req.user._id,

@@ -72,6 +72,12 @@ const usageSessionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Prevent duplicate sync inflation for one app on one day from the same source.
+usageSessionSchema.index(
+  { user: 1, dayKey: 1, appPackage: 1, source: 1 },
+  { unique: true }
+);
+
 const UsageSession = mongoose.model("UsageSession", usageSessionSchema);
 
 export default UsageSession;
