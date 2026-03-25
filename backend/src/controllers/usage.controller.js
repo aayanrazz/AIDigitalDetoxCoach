@@ -2,10 +2,14 @@ import UsageSession from "../models/UsageSession.js";
 import UserSettings from "../models/UserSettings.js";
 import AiInsight from "../models/AiInsight.js";
 import Notification from "../models/Notification.js";
+import AppLimit from "../models/AppLimit.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { formatDayKey } from "../utils/date.js";
-import { analyzeDailyUsage } from "../services/behavior.service.js";
+import {
+  analyzeDailyUsage,
+  evaluateAppLimits,
+} from "../services/behavior.service.js";
 
 function normalizeSession(userId, session) {
   const startTime = new Date(session.startTime);
@@ -51,6 +55,24 @@ async function ensureUserSettings(userId) {
   return settings;
 }
 
+async function createUnreadNotificationIfNeeded(userId, item) {
+  const exists = await Notification.findOne({
+    user: userId,
+    title: item.title,
+    isRead: false,
+  });
+
+  if (!exists) {
+    await Notification.create({
+      user: userId,
+      type: item.type,
+      title: item.title,
+      body: item.body,
+      cta: item.cta,
+    });
+  }
+}
+
 export const ingestUsage = asyncHandler(async (req, res) => {
   const { sessions } = req.body;
 
@@ -89,7 +111,22 @@ export const ingestUsage = asyncHandler(async (req, res) => {
   }).sort({ durationMinutes: -1 });
 
   const settings = await ensureUserSettings(req.user._id);
-  const analysis = analyzeDailyUsage({ sessions: todaySessions, settings });
+
+  const analysis = analyzeDailyUsage({
+    sessions: todaySessions,
+    settings,
+  });
+
+  const appLimits = await AppLimit.find({ user: req.user._id }).sort({
+    dailyLimitMinutes: 1,
+    appName: 1,
+  });
+
+  const appLimitSummary = evaluateAppLimits({
+    sessions: todaySessions,
+    appLimits,
+    limitWarningsEnabled: settings?.notificationSettings?.limitWarnings !== false,
+  });
 
   await AiInsight.findOneAndUpdate(
     { user: req.user._id, dayKey: todayKey },
@@ -102,8 +139,23 @@ export const ingestUsage = asyncHandler(async (req, res) => {
       pickups: analysis.pickups,
       unlocks: analysis.unlocks,
       lateNightMinutes: analysis.lateNightMinutes,
-      reasons: analysis.reasons,
-      recommendations: analysis.recommendations,
+      reasons: [
+        ...analysis.reasons,
+        ...appLimitSummary.exceededApps.map(
+          (item) =>
+            `${item.appName} exceeded its daily limit by ${item.exceededMinutes} minutes.`
+        ),
+      ],
+      recommendations: [
+        ...analysis.recommendations,
+        ...appLimitSummary.exceededApps.map(
+          (item) =>
+            `Reduce ${item.appName} by at least ${Math.min(
+              item.exceededMinutes,
+              20
+            )} minutes tomorrow.`
+        ),
+      ],
     },
     {
       new: true,
@@ -115,22 +167,13 @@ export const ingestUsage = asyncHandler(async (req, res) => {
   req.user.detoxScore = analysis.score;
   await req.user.save();
 
-  for (const item of analysis.notifications) {
-    const exists = await Notification.findOne({
-      user: req.user._id,
-      title: item.title,
-      isRead: false,
-    });
+  const allNotifications = [
+    ...analysis.notifications,
+    ...appLimitSummary.notifications,
+  ];
 
-    if (!exists) {
-      await Notification.create({
-        user: req.user._id,
-        type: item.type,
-        title: item.title,
-        body: item.body,
-        cta: item.cta,
-      });
-    }
+  for (const item of allNotifications) {
+    await createUnreadNotificationIfNeeded(req.user._id, item);
   }
 
   res.status(201).json({
@@ -138,6 +181,7 @@ export const ingestUsage = asyncHandler(async (req, res) => {
     message: "Usage sessions synced successfully.",
     syncedCount: normalized.length,
     analysis,
+    appLimitSummary,
     topApps: todaySessions.slice(0, 5),
   });
 });

@@ -15,20 +15,20 @@ export const analyzeDailyUsage = ({ sessions = [], settings }) => {
   for (const session of sessions) {
     const hour = new Date(session.startTime).getHours();
 
-    totals.totalScreenMinutes += session.durationMinutes || 0;
-    totals.pickups += session.pickups || 0;
-    totals.unlocks += session.unlocks || 0;
+    totals.totalScreenMinutes += Number(session.durationMinutes || 0);
+    totals.pickups += Number(session.pickups || 0);
+    totals.unlocks += Number(session.unlocks || 0);
 
     if (isLateNightHour(hour)) {
-      totals.lateNightMinutes += session.durationMinutes || 0;
+      totals.lateNightMinutes += Number(session.durationMinutes || 0);
     }
 
     if ((session.category || "").toLowerCase().includes("social")) {
-      totals.socialMinutes += session.durationMinutes || 0;
+      totals.socialMinutes += Number(session.durationMinutes || 0);
     }
 
     if ((session.category || "").toLowerCase().includes("product")) {
-      totals.productivityMinutes += session.durationMinutes || 0;
+      totals.productivityMinutes += Number(session.durationMinutes || 0);
     }
   }
 
@@ -75,7 +75,10 @@ export const analyzeDailyUsage = ({ sessions = [], settings }) => {
   }
 
   const notifications = [];
-  if (overLimitMinutes >= 15 && settings?.notificationSettings?.limitWarnings !== false) {
+  if (
+    overLimitMinutes >= 15 &&
+    settings?.notificationSettings?.limitWarnings !== false
+  ) {
     notifications.push({
       type: "limit_warning",
       title: "Daily limit reached",
@@ -84,7 +87,10 @@ export const analyzeDailyUsage = ({ sessions = [], settings }) => {
     });
   }
 
-  if (totals.lateNightMinutes >= 30 && settings?.notificationSettings?.gentleNudges !== false) {
+  if (
+    totals.lateNightMinutes >= 30 &&
+    settings?.notificationSettings?.gentleNudges !== false
+  ) {
     notifications.push({
       type: "sleep",
       title: "Time to sleep",
@@ -100,6 +106,82 @@ export const analyzeDailyUsage = ({ sessions = [], settings }) => {
     ...totals,
     reasons,
     recommendations,
+    notifications,
+  };
+};
+
+export const evaluateAppLimits = ({
+  sessions = [],
+  appLimits = [],
+  limitWarningsEnabled = true,
+}) => {
+  const usageByPackage = {};
+
+  for (const session of sessions) {
+    const appPackage = String(session.appPackage || "").trim();
+    if (!appPackage) continue;
+
+    if (!usageByPackage[appPackage]) {
+      usageByPackage[appPackage] = {
+        appName: session.appName || appPackage,
+        appPackage,
+        category: session.category || "Other",
+        usedMinutes: 0,
+      };
+    }
+
+    usageByPackage[appPackage].usedMinutes += Number(session.durationMinutes || 0);
+  }
+
+  const monitoredApps = appLimits
+    .map((limit) => {
+      const usage = usageByPackage[limit.appPackage] || {};
+      const usedMinutes = Number(usage.usedMinutes || 0);
+      const dailyLimitMinutes = Number(limit.dailyLimitMinutes || 0);
+      const exceededMinutes = Math.max(0, usedMinutes - dailyLimitMinutes);
+      const remainingMinutes = Math.max(0, dailyLimitMinutes - usedMinutes);
+
+      return {
+        appName: limit.appName || usage.appName || limit.appPackage,
+        appPackage: limit.appPackage,
+        category: limit.category || usage.category || "Other",
+        usedMinutes,
+        dailyLimitMinutes,
+        exceededMinutes,
+        remainingMinutes,
+        isExceeded: exceededMinutes > 0,
+      };
+    })
+    .sort((a, b) => b.usedMinutes - a.usedMinutes);
+
+  const exceededApps = monitoredApps
+    .filter((item) => item.isExceeded)
+    .sort(
+      (a, b) =>
+        b.exceededMinutes - a.exceededMinutes || b.usedMinutes - a.usedMinutes
+    );
+
+  const notifications = [];
+
+  if (limitWarningsEnabled) {
+    for (const item of exceededApps) {
+      notifications.push({
+        type: "limit_warning",
+        title: `${item.appName} limit exceeded`,
+        body: `You used ${item.usedMinutes} minutes on ${item.appName}. Your limit is ${item.dailyLimitMinutes} minutes.`,
+        cta: {
+          label: "REVIEW USAGE",
+          action: "open_usage_tab",
+        },
+      });
+    }
+  }
+
+  return {
+    monitoredApps,
+    exceededApps,
+    exceededCount: exceededApps.length,
+    topExceededApp: exceededApps[0] || null,
     notifications,
   };
 };
