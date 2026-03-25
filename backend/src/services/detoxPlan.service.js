@@ -30,20 +30,32 @@ function minusMinutes(value = "23:00", offset = 30) {
   return `${String(nextHours).padStart(2, "0")}:${String(nextMinutes).padStart(2, "0")}`;
 }
 
-function buildFocusTaskTitle(focusAreas = []) {
-  const primary = focusAreas[0] || "Social Media";
+function clampMinutes(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 
-  if (primary.toLowerCase().includes("social")) return "No Social Media Focus Block";
-  if (primary.toLowerCase().includes("gaming")) return "No Gaming Focus Block";
-  if (primary.toLowerCase().includes("stream")) return "No Streaming Focus Block";
-  if (primary.toLowerCase().includes("study")) return "Study Without Distractions";
-  if (primary.toLowerCase().includes("product")) return "Deep Productivity Block";
+function buildPrimaryFocusTaskTitle(focusAreas = []) {
+  const primary = (focusAreas[0] || "Social Media").toLowerCase();
+
+  if (primary.includes("social")) return "No Social Media Focus Block";
+  if (primary.includes("gaming")) return "No Gaming Focus Block";
+  if (primary.includes("stream")) return "No Streaming Focus Block";
+  if (primary.includes("study")) return "Study Without Distractions";
+  if (primary.includes("product")) return "Deep Productivity Block";
 
   return "Deep Focus Session";
 }
 
-function clampMinutes(value, min, max) {
-  return Math.max(min, Math.min(max, value));
+function buildSecondaryFocusTaskTitle(focusAreas = []) {
+  const secondary = (focusAreas[1] || "").toLowerCase();
+
+  if (secondary.includes("sleep")) return "Protect your sleep routine";
+  if (secondary.includes("product")) return "Prioritize productive apps only";
+  if (secondary.includes("social")) return "Avoid social scrolling after lunch";
+  if (secondary.includes("gaming")) return "Avoid gaming during focus hours";
+  if (secondary.includes("stream")) return "Skip entertainment during study time";
+
+  return "Mindful check-in with your phone habits";
 }
 
 export const buildDetoxPlan = ({
@@ -58,11 +70,22 @@ export const buildDetoxPlan = ({
   const bedTime = settings?.sleepSchedule?.bedTime || DEFAULT_BED_TIME;
   const wakeTime = settings?.sleepSchedule?.wakeTime || DEFAULT_WAKE_TIME;
 
+  const notifications = settings?.notificationSettings || {
+    gentleNudges: true,
+    dailySummaries: true,
+    achievementAlerts: true,
+    limitWarnings: true,
+  };
+
   const startDate = new Date();
   startDate.setHours(0, 0, 0, 0);
 
   const durationDays = 21;
-  const configuredLimit = clampMinutes(settings?.dailyLimitMinutes || 240, 60, 1440);
+  const configuredLimit = clampMinutes(
+    settings?.dailyLimitMinutes || 240,
+    60,
+    1440
+  );
   const baseTarget = clampMinutes(
     Math.round(avgDailyMinutes || configuredLimit),
     90,
@@ -70,9 +93,14 @@ export const buildDetoxPlan = ({
   );
 
   const scoreFactor = score < 45 ? 0.68 : score < 70 ? 0.75 : 0.82;
-  const finalTarget = clampMinutes(Math.round(baseTarget * scoreFactor), 75, baseTarget);
+  const finalTarget = clampMinutes(
+    Math.round(baseTarget * scoreFactor),
+    75,
+    baseTarget
+  );
 
-  const focusTaskTitle = buildFocusTaskTitle(focusAreas);
+  const primaryFocusTask = buildPrimaryFocusTaskTitle(focusAreas);
+  const secondaryFocusTask = buildSecondaryFocusTaskTitle(focusAreas);
   const windDownTime = format12Hour(minusMinutes(bedTime, 30));
   const wakeTimeLabel = format12Hour(wakeTime);
 
@@ -98,10 +126,16 @@ export const buildDetoxPlan = ({
           targetTime: wakeTimeLabel,
         },
         {
-          title: focusTaskTitle,
+          title: primaryFocusTask,
           type: "restriction",
           status: "pending",
-          targetTime: "12:00 PM",
+          targetTime: "10:00 AM",
+        },
+        {
+          title: secondaryFocusTask,
+          type: "habit",
+          status: "pending",
+          targetTime: "02:00 PM",
         },
         {
           title: `Stay under ${targetLimitMinutes} minutes`,
@@ -116,7 +150,9 @@ export const buildDetoxPlan = ({
           targetTime: windDownTime,
         },
         {
-          title: "Evening Reflection",
+          title: notifications.dailySummaries
+            ? "Review daily summary before bed"
+            : "Quick evening reflection",
           type: "reflection",
           status: "pending",
           targetTime: "08:30 PM",
@@ -127,12 +163,14 @@ export const buildDetoxPlan = ({
 
   const aiInsight =
     score < 45
-      ? "High-risk behavior detected. This plan reduces screen time faster and emphasizes sleep protection and distraction control."
+      ? "High-risk behavior detected. This plan reduces screen time faster and gives stronger focus and sleep protection."
       : score < 70
-      ? "Moderate-risk behavior detected. This plan gradually reduces usage while reinforcing focus and healthy routines."
-      : "Stable behavior detected. This plan helps maintain progress while slowly improving focus and recovery time.";
+      ? "Moderate-risk behavior detected. This plan gradually reduces usage while reinforcing your focus areas and daily rhythm."
+      : "Stable behavior detected. This plan maintains progress while improving focus, sleep timing, and mindful routines.";
 
-  const planSummary = `A ${durationDays}-day personalized detox plan based on your recent screen time, focus areas, and daily rhythm.`;
+  const planSummary = `A ${durationDays}-day personalized detox plan built from your ${configuredLimit}-minute daily goal, focus areas (${focusAreas.join(
+    ", "
+  )}), and sleep schedule (${wakeTimeLabel} to ${format12Hour(bedTime)}).`;
 
   return {
     startDate,

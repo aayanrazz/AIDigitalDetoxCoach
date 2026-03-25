@@ -1,5 +1,6 @@
 import UserSettings from "../models/UserSettings.js";
 import AppLimit from "../models/AppLimit.js";
+import Notification from "../models/Notification.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { serializeUser } from "../utils/serialize.js";
@@ -14,12 +15,67 @@ async function ensureSettings(userId) {
   return settings;
 }
 
+function clampDailyLimit(value, fallback = 180) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(60, Math.min(1440, Math.round(parsed)));
+}
+
 function normalizeFocusAreas(value) {
   if (!Array.isArray(value)) return undefined;
 
-  return value
+  const normalized = value
     .map((item) => String(item || "").trim())
     .filter(Boolean);
+
+  return Array.from(new Set(normalized)).slice(0, 5);
+}
+
+function normalizeTime(value, fallback = "23:00") {
+  if (value === undefined || value === null || value === "") return fallback;
+
+  const raw = String(value).trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+
+  if (!match) return fallback;
+
+  const hours = Math.max(0, Math.min(23, Number(match[1])));
+  const minutes = Math.max(0, Math.min(59, Number(match[2])));
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function normalizeNotificationSettings(existing = {}, incoming = {}) {
+  return {
+    gentleNudges:
+      incoming.gentleNudges !== undefined
+        ? Boolean(incoming.gentleNudges)
+        : existing.gentleNudges ?? true,
+    dailySummaries:
+      incoming.dailySummaries !== undefined
+        ? Boolean(incoming.dailySummaries)
+        : existing.dailySummaries ?? true,
+    achievementAlerts:
+      incoming.achievementAlerts !== undefined
+        ? Boolean(incoming.achievementAlerts)
+        : existing.achievementAlerts ?? true,
+    limitWarnings:
+      incoming.limitWarnings !== undefined
+        ? Boolean(incoming.limitWarnings)
+        : existing.limitWarnings ?? true,
+  };
+}
+
+function buildOnboardingSummary(user, settings) {
+  return {
+    goal: user.goal || "Reduce screen time",
+    dailyLimitMinutes: settings.dailyLimitMinutes,
+    primaryFocusArea: settings.focusAreas?.[0] || "Social Media",
+    focusAreas: settings.focusAreas || [],
+    bedTime: settings.sleepSchedule?.bedTime || "23:00",
+    wakeTime: settings.sleepSchedule?.wakeTime || "07:00",
+    notificationSettings: settings.notificationSettings,
+  };
 }
 
 export const getSettings = asyncHandler(async (req, res) => {
@@ -33,6 +89,7 @@ export const getSettings = asyncHandler(async (req, res) => {
     user: serializeUser(req.user),
     settings,
     appLimits,
+    onboardingSummary: buildOnboardingSummary(req.user, settings),
   });
 });
 
@@ -42,6 +99,9 @@ export const updateSettings = asyncHandler(async (req, res) => {
   const {
     name,
     avatarUrl,
+    age,
+    occupation,
+    goal,
     dailyLimitMinutes,
     focusAreas,
     sleepSchedule,
@@ -54,33 +114,45 @@ export const updateSettings = asyncHandler(async (req, res) => {
   if (name !== undefined) req.user.name = String(name).trim();
   if (avatarUrl !== undefined) req.user.avatarUrl = String(avatarUrl).trim();
 
+  if (age !== undefined && age !== null && age !== "") {
+    req.user.age = Number(age);
+  }
+
+  if (occupation !== undefined) {
+    req.user.occupation = String(occupation).trim();
+  }
+
+  if (goal !== undefined) {
+    req.user.goal = String(goal).trim();
+  }
+
   if (dailyLimitMinutes !== undefined) {
-    settings.dailyLimitMinutes = Number(dailyLimitMinutes);
+    settings.dailyLimitMinutes = clampDailyLimit(dailyLimitMinutes);
   }
 
   const normalizedFocusAreas = normalizeFocusAreas(focusAreas);
-  if (normalizedFocusAreas !== undefined) {
+  if (normalizedFocusAreas !== undefined && normalizedFocusAreas.length > 0) {
     settings.focusAreas = normalizedFocusAreas;
   }
 
   if (sleepSchedule !== undefined) {
     settings.sleepSchedule = {
-      bedTime:
-        sleepSchedule?.bedTime !== undefined
-          ? String(sleepSchedule.bedTime)
-          : settings.sleepSchedule.bedTime,
-      wakeTime:
-        sleepSchedule?.wakeTime !== undefined
-          ? String(sleepSchedule.wakeTime)
-          : settings.sleepSchedule.wakeTime,
+      bedTime: normalizeTime(
+        sleepSchedule?.bedTime,
+        settings.sleepSchedule?.bedTime || "23:00"
+      ),
+      wakeTime: normalizeTime(
+        sleepSchedule?.wakeTime,
+        settings.sleepSchedule?.wakeTime || "07:00"
+      ),
     };
   }
 
   if (notificationSettings !== undefined) {
-    settings.notificationSettings = {
-      ...settings.notificationSettings,
-      ...notificationSettings,
-    };
+    settings.notificationSettings = normalizeNotificationSettings(
+      settings.notificationSettings,
+      notificationSettings
+    );
   }
 
   if (privacySettings !== undefined) {
@@ -114,6 +186,7 @@ export const updateSettings = asyncHandler(async (req, res) => {
     user: serializeUser(req.user),
     settings,
     appLimits,
+    onboardingSummary: buildOnboardingSummary(req.user, settings),
   });
 });
 
@@ -132,59 +205,62 @@ export const completeProfileSetup = asyncHandler(async (req, res) => {
     notificationSettings,
   } = req.body;
 
-  if (name !== undefined && String(name).trim()) {
-    req.user.name = String(name).trim();
-  }
-
-  if (age !== undefined && age !== null && age !== "") {
-    req.user.age = Number(age);
-  }
-
-  if (occupation !== undefined) {
-    req.user.occupation = String(occupation).trim();
-  }
-
-  if (goal !== undefined) {
-    req.user.goal = String(goal).trim();
-  }
-
-  if (dailyLimitMinutes !== undefined) {
-    settings.dailyLimitMinutes = Number(dailyLimitMinutes);
-  }
-
+  const normalizedName = String(name || "").trim();
+  const normalizedGoal = String(goal || "").trim();
   const normalizedFocusAreas = normalizeFocusAreas(focusAreas);
-  if (normalizedFocusAreas !== undefined) {
-    settings.focusAreas = normalizedFocusAreas;
+
+  if (!normalizedName) {
+    throw new ApiError(400, "Display name is required.");
   }
 
-  if (bedTime !== undefined || wakeTime !== undefined) {
-    settings.sleepSchedule = {
-      bedTime:
-        bedTime !== undefined ? String(bedTime) : settings.sleepSchedule.bedTime,
-      wakeTime:
-        wakeTime !== undefined
-          ? String(wakeTime)
-          : settings.sleepSchedule.wakeTime,
-    };
+  if (!normalizedGoal) {
+    throw new ApiError(400, "Main detox goal is required.");
   }
 
-  if (notificationSettings !== undefined) {
-    settings.notificationSettings = {
-      ...settings.notificationSettings,
-      ...notificationSettings,
-    };
+  if (!normalizedFocusAreas || normalizedFocusAreas.length === 0) {
+    throw new ApiError(400, "Select at least one focus area.");
   }
+
+  req.user.name = normalizedName;
+  req.user.goal = normalizedGoal;
+  req.user.age =
+    age !== undefined && age !== null && age !== "" ? Number(age) : req.user.age;
+  req.user.occupation =
+    occupation !== undefined ? String(occupation).trim() : req.user.occupation;
+
+  settings.dailyLimitMinutes = clampDailyLimit(dailyLimitMinutes, 180);
+  settings.focusAreas = normalizedFocusAreas;
+  settings.sleepSchedule = {
+    bedTime: normalizeTime(bedTime, "23:00"),
+    wakeTime: normalizeTime(wakeTime, "07:00"),
+  };
+  settings.notificationSettings = normalizeNotificationSettings(
+    settings.notificationSettings,
+    notificationSettings || {}
+  );
 
   req.user.isOnboarded = true;
 
   await req.user.save();
   await settings.save();
 
+  await Notification.create({
+    user: req.user._id,
+    type: "system",
+    title: "Profile setup completed",
+    body: `Your detox coach now uses your ${settings.dailyLimitMinutes}-minute daily goal, ${settings.focusAreas[0]} focus, and ${settings.sleepSchedule.bedTime} bedtime preference.`,
+    cta: {
+      label: "VIEW PLAN",
+      action: "open_detox_plan",
+    },
+  });
+
   res.json({
     success: true,
     message: "Profile setup completed.",
     user: serializeUser(req.user),
     settings,
+    onboardingSummary: buildOnboardingSummary(req.user, settings),
   });
 });
 

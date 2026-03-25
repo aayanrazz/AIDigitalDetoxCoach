@@ -13,6 +13,66 @@ import {
   getNextBadgeHint,
 } from "../services/gamification.service.js";
 
+function formatTimeHint(value = "23:00") {
+  const [h = "23", m = "00"] = String(value).split(":");
+  const hours = Number(h) || 0;
+  const minutes = Number(m) || 0;
+  const suffix = hours >= 12 ? "PM" : "AM";
+  const twelve = hours % 12 === 0 ? 12 : hours % 12;
+  return `${twelve}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function buildSettingsDrivenChallenge(settings, pendingTask) {
+  if (pendingTask?.title) return pendingTask.title;
+
+  const primary = settings?.focusAreas?.[0] || "Social Media";
+
+  if (primary.toLowerCase().includes("social")) {
+    return "Avoid social scrolling until midday";
+  }
+
+  if (primary.toLowerCase().includes("gaming")) {
+    return "Keep gaming out of your first focus block";
+  }
+
+  if (primary.toLowerCase().includes("product")) {
+    return "Use only productive apps during your next work session";
+  }
+
+  return `Start wind-down before ${settings?.sleepSchedule?.bedTime || "23:00"}`;
+}
+
+function buildSettingsDrivenRecommendations(settings, todayAnalysis) {
+  const recommendations = [...(todayAnalysis?.recommendations || [])];
+
+  const primary = settings?.focusAreas?.[0];
+  const bedTime = settings?.sleepSchedule?.bedTime;
+  const wakeTime = settings?.sleepSchedule?.wakeTime;
+  const notifications = settings?.notificationSettings || {};
+
+  if (primary) {
+    recommendations.push(`Today's coaching is centered on your focus area: ${primary}.`);
+  }
+
+  if (bedTime) {
+    recommendations.push(`Begin your low-distraction wind-down before ${formatTimeHint(bedTime)}.`);
+  }
+
+  if (wakeTime) {
+    recommendations.push(`Aim for a mindful start after ${formatTimeHint(wakeTime)}.`);
+  }
+
+  if (notifications.gentleNudges === false) {
+    recommendations.push("Gentle nudges are off, so rely more on your dashboard and plan check-ins.");
+  }
+
+  if (notifications.dailySummaries === true) {
+    recommendations.push("Check your daily summary each evening to reflect on progress.");
+  }
+
+  return Array.from(new Set(recommendations)).slice(0, 6);
+}
+
 export const getDashboard = asyncHandler(async (req, res) => {
   let settings = await UserSettings.findOne({ user: req.user._id });
 
@@ -82,7 +142,6 @@ export const getDashboard = asyncHandler(async (req, res) => {
       ?.find((day) => day.status !== "completed")
       ?.tasks?.find((task) => task.status !== "completed") || null;
 
-  const focusAreas = settings?.focusAreas || [];
   const levelProgress = getLevelProgressFromPoints(req.user.points || 0);
   const badges = getUnlockedBadgeDetails(req.user);
   const latestBadge = badges.length ? badges[badges.length - 1] : null;
@@ -98,14 +157,14 @@ export const getDashboard = asyncHandler(async (req, res) => {
       unlocks: todayAnalysis.unlocks,
       streak: req.user.streakCount || 0,
       points: req.user.points || 0,
+      riskLevel: todayAnalysis.riskLevel,
       todayScreenTime: todayAnalysis.totalScreenMinutes,
       dailyGoal: settings?.dailyLimitMinutes ?? 180,
-      dailyChallenge:
-        pendingTask?.title ||
-        (focusAreas.includes("Social Media")
-          ? "No Social Media until 12PM"
-          : "Take a nature break"),
-      aiRecommendations: todayAnalysis.recommendations,
+      dailyChallenge: buildSettingsDrivenChallenge(settings, pendingTask),
+      aiRecommendations: buildSettingsDrivenRecommendations(
+        settings,
+        todayAnalysis
+      ),
       unreadNotifications,
       leaderboard,
 
@@ -117,7 +176,9 @@ export const getDashboard = asyncHandler(async (req, res) => {
       badgesCount: badges.length,
       latestBadgeLabel: latestBadge?.label || "",
       latestBadgeEmoji: latestBadge?.emoji || "",
-      nextBadgeHintText: nextBadgeHint?.hint || "All badges unlocked.",
+      nextBadgeHintText:
+        nextBadgeHint?.hint ||
+        "Keep following your plan to unlock more badges.",
     },
   });
 });
