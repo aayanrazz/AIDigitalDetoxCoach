@@ -4,7 +4,12 @@ import Notification from "../models/Notification.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { serializeUser } from "../utils/serialize.js";
-import { getLevelProgressFromPoints } from "../services/gamification.service.js";
+import {
+  getLevelProgressFromPoints,
+  getUnlockedBadgeDetails,
+  getBadgeStats,
+  getNextBadgeHint,
+} from "../services/gamification.service.js";
 
 const REDEEMABLES = {
   DARK_THEME_PRO: {
@@ -36,7 +41,11 @@ export const getRewardsSummary = asyncHandler(async (req, res) => {
     .limit(10)
     .select("name points streakCount");
 
-  const levelProgress = getLevelProgressFromPoints(req.user.points);
+  const levelProgress = getLevelProgressFromPoints(req.user.points || 0);
+  const badges = getUnlockedBadgeDetails(req.user);
+  const badgeStats = getBadgeStats(req.user);
+  const nextBadgeHint = getNextBadgeHint(req.user);
+  const latestBadge = badges.length ? badges[badges.length - 1] : null;
 
   res.json({
     success: true,
@@ -47,6 +56,10 @@ export const getRewardsSummary = asyncHandler(async (req, res) => {
       progressPct: levelProgress.progressPct,
       pointsToNextLevel: levelProgress.pointsToNextLevel,
     },
+    badges,
+    badgeStats,
+    latestBadge,
+    nextBadgeHint,
     recentRewards,
     leaderboard,
     redeemables: Object.values(REDEEMABLES),
@@ -87,7 +100,11 @@ export const redeemReward = asyncHandler(async (req, res) => {
     },
   });
 
-  const levelProgress = getLevelProgressFromPoints(req.user.points);
+  const levelProgress = getLevelProgressFromPoints(req.user.points || 0);
+  const badges = getUnlockedBadgeDetails(req.user);
+  const badgeStats = getBadgeStats(req.user);
+  const nextBadgeHint = getNextBadgeHint(req.user);
+  const latestBadge = badges.length ? badges[badges.length - 1] : null;
 
   res.json({
     success: true,
@@ -99,5 +116,9 @@ export const redeemReward = asyncHandler(async (req, res) => {
       progressPct: levelProgress.progressPct,
       pointsToNextLevel: levelProgress.pointsToNextLevel,
     },
+    badges,
+    badgeStats,
+    latestBadge,
+    nextBadgeHint,
   });
 });
