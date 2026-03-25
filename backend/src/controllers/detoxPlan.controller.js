@@ -5,8 +5,7 @@ import UsageSession from "../models/UsageSession.js";
 import UserSettings from "../models/UserSettings.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
-import { getRangeStart, formatDayKey, addDays } from "../utils/date.js";
-import { buildAnalytics } from "../services/analytics.service.js";
+import { formatDayKey, addDays } from "../utils/date.js";
 import { buildDetoxPlan } from "../services/detoxPlan.service.js";
 import {
   syncBadges,
@@ -33,15 +32,165 @@ function getTaskPointValue(type = "habit") {
   return 15;
 }
 
+function getAverageDailyMinutes(sessions = [], fallback = 240) {
+  if (!sessions.length) return fallback;
+
+  const byDay = new Map();
+
+  for (const session of sessions) {
+    const dayKey =
+      session.dayKey ||
+      formatDayKey(session.startTime ? new Date(session.startTime) : new Date());
+
+    byDay.set(
+      dayKey,
+      (byDay.get(dayKey) || 0) + Number(session.durationMinutes || 0)
+    );
+  }
+
+  const totals = Array.from(byDay.values());
+  if (!totals.length) return fallback;
+
+  return Math.max(
+    60,
+    Math.round(totals.reduce((sum, value) => sum + value, 0) / totals.length)
+  );
+}
+
+function applyPlanFlowState(plan) {
+  if (!plan?.days?.length) return;
+
+  const firstOpenDayIndex = plan.days.findIndex((day) =>
+    day.tasks?.some((task) => task.status !== "completed")
+  );
+
+  if (firstOpenDayIndex === -1) {
+    for (const day of plan.days) {
+      day.status = "completed";
+
+      for (const task of day.tasks || []) {
+        task.status = "completed";
+      }
+    }
+    return;
+  }
+
+  plan.days.forEach((day, dayIndex) => {
+    const hasIncompleteTask = day.tasks?.some(
+      (task) => task.status !== "completed"
+    );
+
+    if (!hasIncompleteTask) {
+      day.status = "completed";
+      return;
+    }
+
+    if (dayIndex < firstOpenDayIndex) {
+      day.status = "completed";
+      return;
+    }
+
+    if (dayIndex === firstOpenDayIndex) {
+      day.status = "in_progress";
+
+      let promoted = false;
+
+      for (const task of day.tasks || []) {
+        if (task.status === "completed") continue;
+
+        if (!promoted) {
+          task.status = "in_progress";
+          promoted = true;
+        } else {
+          task.status = "pending";
+        }
+      }
+
+      return;
+    }
+
+    day.status = "pending";
+
+    for (const task of day.tasks || []) {
+      if (task.status !== "completed") {
+        task.status = "pending";
+      }
+    }
+  });
+}
+
+function enrichPlan(planDoc) {
+  if (!planDoc) return null;
+
+  const raw =
+    typeof planDoc.toObject === "function" ? planDoc.toObject() : planDoc;
+
+  const days = (raw.days || []).map((day) => {
+    const tasks = (day.tasks || []).map((task) => ({
+      ...task,
+      pointsReward: getTaskPointValue(task.type),
+    }));
+
+    const totalTasks = tasks.length;
+    const completedTasks = tasks.filter(
+      (task) => task.status === "completed"
+    ).length;
+
+    return {
+      ...day,
+      tasks,
+      totalTasks,
+      completedTasks,
+      progressPct:
+        totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+    };
+  });
+
+  const totalDays = days.length;
+  const completedDays = days.filter((day) => day.status === "completed").length;
+  const pendingDays = days.filter((day) => day.status === "pending").length;
+  const totalTasks = days.reduce((sum, day) => sum + (day.totalTasks || 0), 0);
+  const completedTasks = days.reduce(
+    (sum, day) => sum + (day.completedTasks || 0),
+    0
+  );
+
+  const currentDay =
+    days.find((day) => day.status === "in_progress") ||
+    days.find((day) => day.status === "pending") ||
+    days[days.length - 1] ||
+    null;
+
+  return {
+    ...raw,
+    days,
+    totalDays,
+    completedDays,
+    pendingDays,
+    totalTasks,
+    completedTasks,
+    overallProgressPct:
+      totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+    currentDayNumber: currentDay?.dayNumber ?? null,
+    status:
+      !raw.active && completedDays === totalDays ? "completed" : "active",
+  };
+}
+
 export const generateDetoxPlan = asyncHandler(async (req, res) => {
   const settings = await ensureSettings(req.user._id);
 
   const sessions = await UsageSession.find({
     user: req.user._id,
-    startTime: { $gte: getRangeStart("week") },
+    startTime: {
+      $gte: addDays(new Date(), -7),
+    },
   });
 
-  const analytics = buildAnalytics(sessions, req.user);
+  const avgDailyMinutes = getAverageDailyMinutes(
+    sessions,
+    settings.dailyLimitMinutes || 240
+  );
 
   await DetoxPlan.updateMany(
     { user: req.user._id, active: true },
@@ -49,9 +198,9 @@ export const generateDetoxPlan = asyncHandler(async (req, res) => {
   );
 
   const planData = buildDetoxPlan({
-    avgDailyMinutes: analytics.averageDailyMinutes || settings.dailyLimitMinutes,
+    avgDailyMinutes,
     settings,
-    score: req.user.detoxScore,
+    score: req.user.detoxScore || 75,
   });
 
   const plan = await DetoxPlan.create({
@@ -59,11 +208,14 @@ export const generateDetoxPlan = asyncHandler(async (req, res) => {
     ...planData,
   });
 
+  applyPlanFlowState(plan);
+  await plan.save();
+
   await Notification.create({
     user: req.user._id,
     type: "summary",
     title: "New detox plan generated",
-    body: "Your personalized detox plan is ready. Start with today's focus tasks.",
+    body: "Your personalized detox plan is ready. Start with today’s focus tasks.",
     cta: {
       label: "VIEW PLAN",
       action: "open_detox_plan",
@@ -73,7 +225,7 @@ export const generateDetoxPlan = asyncHandler(async (req, res) => {
   res.status(201).json({
     success: true,
     message: "Detox plan generated successfully.",
-    plan,
+    plan: enrichPlan(plan),
   });
 });
 
@@ -83,9 +235,14 @@ export const getActivePlan = asyncHandler(async (req, res) => {
     active: true,
   }).sort({ createdAt: -1 });
 
+  if (plan) {
+    applyPlanFlowState(plan);
+    await plan.save();
+  }
+
   res.json({
     success: true,
-    plan,
+    plan: enrichPlan(plan),
   });
 });
 
@@ -111,7 +268,7 @@ export const completePlanTask = asyncHandler(async (req, res) => {
     }
   }
 
-  if (!targetTask || !targetDay) {
+  if (!targetDay || !targetTask) {
     throw new ApiError(404, "Task not found.");
   }
 
@@ -122,16 +279,19 @@ export const completePlanTask = asyncHandler(async (req, res) => {
   targetTask.status = "completed";
   targetTask.completedAt = new Date();
 
-  const basePoints = getTaskPointValue(targetTask.type);
-  req.user.points += basePoints;
+  const basePointsEarned = getTaskPointValue(targetTask.type);
+  let dayBonusPoints = 0;
+  let planBonusPoints = 0;
 
-  const allCompletedForDay = targetDay.tasks.every(
+  req.user.points = Number(req.user.points || 0) + basePointsEarned;
+
+  const dayCompleted = targetDay.tasks.every(
     (task) => task.status === "completed"
   );
 
-  if (allCompletedForDay) {
-    targetDay.status = "completed";
-    req.user.points += 40;
+  if (dayCompleted) {
+    dayBonusPoints = 40;
+    req.user.points += dayBonusPoints;
 
     const todayKey = formatDayKey();
     const yesterdayKey = formatDayKey(addDays(new Date(), -1));
@@ -141,35 +301,47 @@ export const completePlanTask = asyncHandler(async (req, res) => {
 
     if (lastStreakKey !== todayKey) {
       if (lastStreakKey === yesterdayKey) {
-        req.user.streakCount += 1;
+        req.user.streakCount = Number(req.user.streakCount || 0) + 1;
       } else {
         req.user.streakCount = 1;
       }
 
       req.user.longestStreak = Math.max(
-        req.user.longestStreak || 0,
-        req.user.streakCount || 0
+        Number(req.user.longestStreak || 0),
+        Number(req.user.streakCount || 0)
       );
       req.user.lastStreakDate = new Date();
     }
+  }
 
-    const nextPendingDay = plan.days.find((day) => day.status === "pending");
-    if (nextPendingDay) {
-      nextPendingDay.status = "in_progress";
-      if (nextPendingDay.tasks?.length) {
-        const nextOpenTask = nextPendingDay.tasks.find(
-          (task) => task.status !== "completed"
-        );
-        if (nextOpenTask && nextOpenTask.status === "pending") {
-          nextOpenTask.status = "in_progress";
-        }
-      }
-    }
+  applyPlanFlowState(plan);
 
+  const planCompleted = plan.days.every((day) => day.status === "completed");
+
+  if (planCompleted && plan.active) {
+    plan.active = false;
+    planBonusPoints = 250;
+    req.user.points += planBonusPoints;
+  }
+
+  const newBadges = syncBadges(req.user);
+
+  await req.user.save();
+  await plan.save();
+
+  await RewardLedger.create({
+    user: req.user._id,
+    type: "earn",
+    points: basePointsEarned,
+    title: "Task completed",
+    description: `Completed: ${targetTask.title}`,
+  });
+
+  if (dayBonusPoints > 0) {
     await RewardLedger.create({
       user: req.user._id,
       type: "earn",
-      points: 40,
+      points: dayBonusPoints,
       title: "Day completed",
       description: `Completed day ${targetDay.dayNumber} of your detox plan.`,
     });
@@ -184,20 +356,13 @@ export const completePlanTask = asyncHandler(async (req, res) => {
         action: "open_rewards",
       },
     });
-  } else {
-    targetDay.status = "in_progress";
   }
 
-  const allPlanDaysCompleted = plan.days.every((day) => day.status === "completed");
-
-  if (allPlanDaysCompleted && plan.active) {
-    plan.active = false;
-    req.user.points += 250;
-
+  if (planBonusPoints > 0) {
     await RewardLedger.create({
       user: req.user._id,
       type: "earn",
-      points: 250,
+      points: planBonusPoints,
       title: "Plan completed",
       description: `Completed the full ${plan.durationDays}-day detox plan.`,
     });
@@ -214,19 +379,6 @@ export const completePlanTask = asyncHandler(async (req, res) => {
     });
   }
 
-  const newBadges = syncBadges(req.user);
-
-  await req.user.save();
-  await plan.save();
-
-  await RewardLedger.create({
-    user: req.user._id,
-    type: "earn",
-    points: basePoints,
-    title: "Task completed",
-    description: `Completed: ${targetTask.title}`,
-  });
-
   if (newBadges.length > 0) {
     await Notification.create({
       user: req.user._id,
@@ -240,18 +392,30 @@ export const completePlanTask = asyncHandler(async (req, res) => {
     });
   }
 
-  const levelProgress = getLevelProgressFromPoints(req.user.points);
+  const levelProgress = getLevelProgressFromPoints(req.user.points || 0);
 
   res.json({
     success: true,
     message: "Task completed successfully.",
-    plan,
+    plan: enrichPlan(plan),
     user: {
       ...serializeUser(req.user),
       level: levelProgress.level,
       nextLevel: levelProgress.nextLevel,
       progressPct: levelProgress.progressPct,
       pointsToNextLevel: levelProgress.pointsToNextLevel,
+    },
+    completion: {
+      taskTitle: targetTask.title,
+      taskType: targetTask.type || "habit",
+      basePointsEarned,
+      dayBonusPoints,
+      planBonusPoints,
+      totalPointsEarned:
+        basePointsEarned + dayBonusPoints + planBonusPoints,
+      dayCompleted,
+      planCompleted,
+      completedDayNumber: dayCompleted ? targetDay.dayNumber : null,
     },
     newBadges,
   });
