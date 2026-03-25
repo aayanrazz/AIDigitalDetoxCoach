@@ -7,6 +7,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { formatDayKey, getRangeStart } from "../utils/date.js";
 import { analyzeDailyUsage } from "../services/behavior.service.js";
 import { buildAnalytics } from "../services/analytics.service.js";
+import { getLevelProgressFromPoints } from "../services/gamification.service.js";
 
 export const getDashboard = asyncHandler(async (req, res) => {
   let settings = await UserSettings.findOne({ user: req.user._id });
@@ -16,6 +17,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
   }
 
   const todayKey = formatDayKey();
+
   const todaySessions = await UsageSession.find({
     user: req.user._id,
     dayKey: todayKey,
@@ -78,6 +80,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
       ?.tasks?.find((task) => task.status !== "completed") || null;
 
   const focusAreas = settings?.focusAreas || [];
+  const levelProgress = getLevelProgressFromPoints(req.user.points || 0);
 
   res.json({
     success: true,
@@ -87,7 +90,18 @@ export const getDashboard = asyncHandler(async (req, res) => {
       improvementVsLastWeek,
       pickups: todayAnalysis.pickups,
       unlocks: todayAnalysis.unlocks,
-      streak: req.user.streakCount,
+      streak: req.user.streakCount || 0,
+
+      // FIXED: send points for frontend dashboard
+      points: req.user.points || 0,
+
+      // extra gamification data for dashboard / future UI
+      badgesCount: Array.isArray(req.user.badges) ? req.user.badges.length : 0,
+      currentLevelNumber: levelProgress.level?.number || 1,
+      currentLevelTitle: levelProgress.level?.title || "Mindful Seed",
+      progressPct: levelProgress.progressPct ?? 0,
+      pointsToNextLevel: levelProgress.pointsToNextLevel ?? 0,
+
       todayScreenTime: todayAnalysis.totalScreenMinutes,
       dailyGoal: settings?.dailyLimitMinutes ?? 180,
       dailyChallenge:
@@ -95,7 +109,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
         (focusAreas.includes("Social Media")
           ? "No Social Media until 12PM"
           : "Take a nature break"),
-      aiRecommendations: todayAnalysis.recommendations,
+      aiRecommendations: todayAnalysis.recommendations || [],
       unreadNotifications,
       leaderboard,
     },
