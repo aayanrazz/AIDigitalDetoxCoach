@@ -26,7 +26,7 @@ app.use(morgan("dev"));
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 500,
+  max: env.NODE_ENV === "development" ? 5000 : 500,
   standardHeaders: true,
   legacyHeaders: false,
 });

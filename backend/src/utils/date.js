@@ -1,6 +1,11 @@
+function pad(value) {
+  return String(value).padStart(2, "0");
+}
+
 export const formatDayKey = (dateLike = new Date()) => {
   const d = new Date(dateLike);
-  return d.toISOString().split("T")[0];
+
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
 
 export const addDays = (dateLike, days) => {
