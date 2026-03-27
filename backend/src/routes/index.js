@@ -6,6 +6,9 @@ import {
   completeProfileSetup,
   saveAppLimit,
   deleteAppLimit,
+  getPrivacyPolicy,
+  savePrivacyConsent,
+  deleteMyData,
 } from "../controllers/settings.controller.js";
 import { ingestUsage, getTodayUsage } from "../controllers/usage.controller.js";
 import {
@@ -32,29 +35,41 @@ import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
 
+// Health
 router.get("/health", (_req, res) => {
   res.json({ success: true, message: "API is healthy" });
 });
 
+// Auth
 router.post("/auth/register", register);
 router.post("/auth/login", login);
 router.get("/auth/me", protect, getMe);
 
+// Settings / Profile
 router.get("/settings", protect, getSettings);
 router.put("/settings", protect, updateSettings);
 router.put("/profile/setup", protect, completeProfileSetup);
 router.post("/settings/app-limits", protect, saveAppLimit);
 router.delete("/settings/app-limits/:appPackage", protect, deleteAppLimit);
 
+// Privacy / Compliance
+router.get("/privacy/policy", protect, getPrivacyPolicy);
+router.put("/privacy/consent", protect, savePrivacyConsent);
+router.delete("/privacy/delete-my-data", protect, deleteMyData);
+
+// Dashboard
 router.get("/dashboard", protect, getDashboard);
 
+// Usage
 router.post("/usage/ingest", protect, ingestUsage);
 router.get("/usage/today", protect, getTodayUsage);
 
+// Analytics
 router.get("/analytics/summary", protect, getAnalyticsSummary);
 router.get("/analytics/export", protect, exportAnalyticsReport);
 router.get("/analytics/export-dataset", protect, exportAnonymizedDataset);
 
+// Detox Plan
 router.post("/detox-plans/generate", protect, generateDetoxPlan);
 router.get("/detox-plans/active", protect, getActivePlan);
 router.patch(
@@ -63,10 +78,12 @@ router.patch(
   completePlanTask
 );
 
+// Notifications
 router.get("/notifications", protect, getNotifications);
 router.patch("/notifications/mark-all-read", protect, markAllNotificationsRead);
 router.patch("/notifications/:id/read", protect, markNotificationRead);
 
+// Rewards
 router.get("/rewards", protect, getRewardsSummary);
 router.post("/rewards/redeem", protect, redeemReward);
 

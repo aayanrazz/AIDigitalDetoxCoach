@@ -1,9 +1,13 @@
 import UserSettings from "../models/UserSettings.js";
 import AppLimit from "../models/AppLimit.js";
 import Notification from "../models/Notification.js";
+import UsageSession from "../models/UsageSession.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { serializeUser } from "../utils/serialize.js";
+
+const PRIVACY_POLICY_VERSION = "v1.0";
+const RETENTION_OPTIONS = [7, 30, 90, 180, 365];
 
 async function ensureSettings(userId) {
   let settings = await UserSettings.findOne({ user: userId });
@@ -19,6 +23,12 @@ function clampDailyLimit(value, fallback = 180) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(60, Math.min(1440, Math.round(parsed)));
+}
+
+function clampRetentionDays(value, fallback = 30) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return RETENTION_OPTIONS.includes(parsed) ? parsed : fallback;
 }
 
 function normalizeFocusAreas(value) {
@@ -66,6 +76,59 @@ function normalizeNotificationSettings(existing = {}, incoming = {}) {
   };
 }
 
+function normalizePrivacySettings(existing = {}, incoming = {}) {
+  const consentGiven =
+    incoming.consentGiven !== undefined
+      ? Boolean(incoming.consentGiven)
+      : existing.consentGiven ?? false;
+
+  const anonymizeData =
+    incoming.anonymizeData !== undefined
+      ? Boolean(incoming.anonymizeData)
+      : existing.anonymizeData ?? true;
+
+  const dataCollection =
+    incoming.dataCollection !== undefined
+      ? Boolean(incoming.dataCollection)
+      : existing.dataCollection ?? false;
+
+  const allowAnalyticsForTraining =
+    incoming.allowAnalyticsForTraining !== undefined
+      ? Boolean(incoming.allowAnalyticsForTraining)
+      : existing.allowAnalyticsForTraining ?? false;
+
+  const retentionDays =
+    incoming.retentionDays !== undefined
+      ? clampRetentionDays(incoming.retentionDays, existing.retentionDays ?? 30)
+      : existing.retentionDays ?? 30;
+
+  return {
+    dataCollection: consentGiven ? dataCollection : false,
+    anonymizeData,
+    allowAnalyticsForTraining: consentGiven
+      ? allowAnalyticsForTraining
+      : false,
+    retentionDays,
+    consentGiven,
+    consentVersion:
+      incoming.consentVersion !== undefined
+        ? String(incoming.consentVersion)
+        : existing.consentVersion || PRIVACY_POLICY_VERSION,
+    consentedAt:
+      incoming.consentedAt !== undefined
+        ? incoming.consentedAt
+        : existing.consentedAt ?? null,
+    policyLastViewedAt:
+      incoming.policyLastViewedAt !== undefined
+        ? incoming.policyLastViewedAt
+        : existing.policyLastViewedAt ?? null,
+    deletionRequestedAt:
+      incoming.deletionRequestedAt !== undefined
+        ? incoming.deletionRequestedAt
+        : existing.deletionRequestedAt ?? null,
+  };
+}
+
 function buildOnboardingSummary(user, settings) {
   return {
     goal: user.goal || "Reduce screen time",
@@ -78,8 +141,67 @@ function buildOnboardingSummary(user, settings) {
   };
 }
 
+function buildPrivacyPolicyPayload(settings) {
+  return {
+    version: PRIVACY_POLICY_VERSION,
+    updatedAt: "2026-03-27",
+    summary: [
+      "This app asks for clear consent before collecting usage data for analytics.",
+      "You can enable anonymized storage and limit how long data is kept.",
+      "You can stop collection and request deletion of stored usage data from inside the app.",
+      "Anonymized dataset exports remove direct identity fields and app names.",
+    ],
+    sections: [
+      {
+        title: "What data may be collected",
+        items: [
+          "App usage duration",
+          "Pickups and unlock counts",
+          "Notification interactions",
+          "Selected detox preferences and settings",
+        ],
+      },
+      {
+        title: "Why data is used",
+        items: [
+          "To show analytics and reports",
+          "To generate detox plans",
+          "To trigger gentle interventions",
+          "To prepare anonymized training datasets when you allow it",
+        ],
+      },
+      {
+        title: "Your controls",
+        items: [
+          "Give or withdraw consent at any time",
+          "Disable data collection",
+          "Enable anonymization",
+          "Choose retention period",
+          "Delete your stored usage data",
+        ],
+      },
+    ],
+    retentionOptions: RETENTION_OPTIONS,
+    securityPractices: [
+      "Usage exports can be anonymized before sharing.",
+      "Delete-my-data removes stored usage sessions, notifications, and app limits from the backend.",
+      "Production deployment should use HTTPS so data is encrypted in transit.",
+      "Sensitive secrets should stay in environment variables on the server.",
+    ],
+    currentPrivacySettings: normalizePrivacySettings(
+      settings?.privacySettings || {}
+    ),
+  };
+}
+
 export const getSettings = asyncHandler(async (req, res) => {
   const settings = await ensureSettings(req.user._id);
+
+  settings.privacySettings = normalizePrivacySettings(
+    settings.privacySettings || {}
+  );
+  await settings.save();
+
   const appLimits = await AppLimit.find({ user: req.user._id }).sort({
     createdAt: -1,
   });
@@ -156,10 +278,14 @@ export const updateSettings = asyncHandler(async (req, res) => {
   }
 
   if (privacySettings !== undefined) {
-    settings.privacySettings = {
-      ...settings.privacySettings,
-      ...privacySettings,
-    };
+    settings.privacySettings = normalizePrivacySettings(
+      settings.privacySettings || {},
+      privacySettings
+    );
+  } else {
+    settings.privacySettings = normalizePrivacySettings(
+      settings.privacySettings || {}
+    );
   }
 
   if (integrations !== undefined) {
@@ -238,6 +364,9 @@ export const completeProfileSetup = asyncHandler(async (req, res) => {
     settings.notificationSettings,
     notificationSettings || {}
   );
+  settings.privacySettings = normalizePrivacySettings(
+    settings.privacySettings || {}
+  );
 
   req.user.isOnboarded = true;
 
@@ -261,29 +390,6 @@ export const completeProfileSetup = asyncHandler(async (req, res) => {
     user: serializeUser(req.user),
     settings,
     onboardingSummary: buildOnboardingSummary(req.user, settings),
-  });
-});
-
-export const deleteAppLimit = asyncHandler(async (req, res) => {
-  const appPackage = String(req.params.appPackage || "").trim();
-
-  if (!appPackage) {
-    throw new ApiError(400, "appPackage is required.");
-  }
-
-  await AppLimit.findOneAndDelete({
-    user: req.user._id,
-    appPackage,
-  });
-
-  const appLimits = await AppLimit.find({ user: req.user._id }).sort({
-    createdAt: -1,
-  });
-
-  res.json({
-    success: true,
-    message: "App limit removed successfully.",
-    appLimits,
   });
 });
 
@@ -323,5 +429,113 @@ export const saveAppLimit = asyncHandler(async (req, res) => {
     success: true,
     message: "App limit saved successfully.",
     appLimit: limit,
+  });
+});
+
+export const deleteAppLimit = asyncHandler(async (req, res) => {
+  const appPackage = String(req.params.appPackage || "").trim();
+
+  if (!appPackage) {
+    throw new ApiError(400, "appPackage is required.");
+  }
+
+  await AppLimit.findOneAndDelete({
+    user: req.user._id,
+    appPackage,
+  });
+
+  const appLimits = await AppLimit.find({ user: req.user._id }).sort({
+    createdAt: -1,
+  });
+
+  res.json({
+    success: true,
+    message: "App limit removed successfully.",
+    appLimits,
+  });
+});
+
+export const getPrivacyPolicy = asyncHandler(async (req, res) => {
+  const settings = await ensureSettings(req.user._id);
+
+  settings.privacySettings = normalizePrivacySettings(
+    settings.privacySettings || {},
+    {
+      policyLastViewedAt: new Date(),
+    }
+  );
+
+  await settings.save();
+
+  res.json({
+    success: true,
+    policy: buildPrivacyPolicyPayload(settings),
+  });
+});
+
+export const savePrivacyConsent = asyncHandler(async (req, res) => {
+  const settings = await ensureSettings(req.user._id);
+
+  const {
+    consentGiven,
+    dataCollection,
+    anonymizeData,
+    allowAnalyticsForTraining,
+    retentionDays,
+  } = req.body;
+
+  const normalized = normalizePrivacySettings(settings.privacySettings || {}, {
+    consentGiven,
+    dataCollection,
+    anonymizeData,
+    allowAnalyticsForTraining,
+    retentionDays,
+    consentVersion: PRIVACY_POLICY_VERSION,
+    consentedAt: Boolean(consentGiven) ? new Date() : null,
+    policyLastViewedAt: new Date(),
+  });
+
+  settings.privacySettings = normalized;
+  await settings.save();
+
+  res.json({
+    success: true,
+    message: normalized.consentGiven
+      ? "Privacy consent saved successfully."
+      : "Consent withdrawn and data collection disabled.",
+    privacySettings: settings.privacySettings,
+  });
+});
+
+export const deleteMyData = asyncHandler(async (req, res) => {
+  await Promise.all([
+    UsageSession.deleteMany({ user: req.user._id }),
+    AppLimit.deleteMany({ user: req.user._id }),
+    Notification.deleteMany({ user: req.user._id }),
+  ]);
+
+  const settings = await ensureSettings(req.user._id);
+
+  settings.privacySettings = normalizePrivacySettings(settings.privacySettings || {}, {
+    consentGiven: false,
+    dataCollection: false,
+    anonymizeData: true,
+    allowAnalyticsForTraining: false,
+    consentedAt: null,
+    deletionRequestedAt: new Date(),
+  });
+
+  await settings.save();
+
+  res.json({
+    success: true,
+    message:
+      "Stored usage data, app limits, and notifications were deleted successfully.",
+    deleted: {
+      usageSessions: true,
+      appLimits: true,
+      notifications: true,
+    },
+    privacySettings: settings.privacySettings,
   });
 });
