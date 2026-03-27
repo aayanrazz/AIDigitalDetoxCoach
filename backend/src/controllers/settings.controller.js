@@ -264,6 +264,29 @@ export const completeProfileSetup = asyncHandler(async (req, res) => {
   });
 });
 
+export const deleteAppLimit = asyncHandler(async (req, res) => {
+  const appPackage = String(req.params.appPackage || "").trim();
+
+  if (!appPackage) {
+    throw new ApiError(400, "appPackage is required.");
+  }
+
+  await AppLimit.findOneAndDelete({
+    user: req.user._id,
+    appPackage,
+  });
+
+  const appLimits = await AppLimit.find({ user: req.user._id }).sort({
+    createdAt: -1,
+  });
+
+  res.json({
+    success: true,
+    message: "App limit removed successfully.",
+    appLimits,
+  });
+});
+
 export const saveAppLimit = asyncHandler(async (req, res) => {
   const { appName, appPackage, category, dailyLimitMinutes } = req.body;
 
