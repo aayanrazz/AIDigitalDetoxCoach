@@ -51,23 +51,33 @@ function buildSettingsDrivenRecommendations(settings, todayAnalysis) {
   const notifications = settings?.notificationSettings || {};
 
   if (primary) {
-    recommendations.push(`Today's coaching is centered on your focus area: ${primary}.`);
+    recommendations.push(
+      `Today's coaching is centered on your focus area: ${primary}.`
+    );
   }
 
   if (bedTime) {
-    recommendations.push(`Begin your low-distraction wind-down before ${formatTimeHint(bedTime)}.`);
+    recommendations.push(
+      `Begin your low-distraction wind-down before ${formatTimeHint(bedTime)}.`
+    );
   }
 
   if (wakeTime) {
-    recommendations.push(`Aim for a mindful start after ${formatTimeHint(wakeTime)}.`);
+    recommendations.push(
+      `Aim for a mindful start after ${formatTimeHint(wakeTime)}.`
+    );
   }
 
   if (notifications.gentleNudges === false) {
-    recommendations.push("Gentle nudges are off, so rely more on your dashboard and plan check-ins.");
+    recommendations.push(
+      "Gentle nudges are off, so rely more on your dashboard and plan check-ins."
+    );
   }
 
   if (notifications.dailySummaries === true) {
-    recommendations.push("Check your daily summary each evening to reflect on progress.");
+    recommendations.push(
+      "Check your daily summary each evening to reflect on progress."
+    );
   }
 
   return Array.from(new Set(recommendations)).slice(0, 6);
@@ -86,15 +96,21 @@ export const getDashboard = asyncHandler(async (req, res) => {
     dayKey: todayKey,
   });
 
+  const weekStart = getRangeStart("week");
+  const now = new Date();
+
   const currentWeekSessions = await UsageSession.find({
     user: req.user._id,
-    startTime: { $gte: getRangeStart("week") },
+    startTime: {
+      $gte: weekStart,
+      $lte: now,
+    },
   });
 
-  const previousWeekStart = new Date(getRangeStart("week"));
+  const previousWeekStart = new Date(weekStart);
   previousWeekStart.setDate(previousWeekStart.getDate() - 7);
 
-  const previousWeekEnd = new Date(getRangeStart("week"));
+  const previousWeekEnd = new Date(weekStart);
 
   const previousWeekSessions = await UsageSession.find({
     user: req.user._id,
@@ -109,8 +125,21 @@ export const getDashboard = asyncHandler(async (req, res) => {
     settings,
   });
 
-  const currentAnalytics = buildAnalytics(currentWeekSessions, req.user);
-  const previousAnalytics = buildAnalytics(previousWeekSessions, req.user);
+  const currentAnalytics = buildAnalytics({
+    sessions: currentWeekSessions,
+    user: req.user,
+    range: "week",
+    startDate: weekStart,
+    endDate: now,
+  });
+
+  const previousAnalytics = buildAnalytics({
+    sessions: previousWeekSessions,
+    user: req.user,
+    range: "week",
+    startDate: previousWeekStart,
+    endDate: previousWeekEnd,
+  });
 
   const improvementVsLastWeek =
     previousAnalytics.averageDailyMinutes > 0
@@ -167,12 +196,10 @@ export const getDashboard = asyncHandler(async (req, res) => {
       ),
       unreadNotifications,
       leaderboard,
-
       currentLevelNumber: levelProgress.level?.number || 1,
       currentLevelTitle: levelProgress.level?.title || "Mindful Seed",
       progressPct: levelProgress.progressPct ?? 0,
       pointsToNextLevel: levelProgress.pointsToNextLevel ?? 0,
-
       badgesCount: badges.length,
       latestBadgeLabel: latestBadge?.label || "",
       latestBadgeEmoji: latestBadge?.emoji || "",
