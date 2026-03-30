@@ -10,7 +10,8 @@ import {
   savePrivacyConsent,
   deleteMyData,
 } from "../controllers/settings.controller.js";
-import { ingestUsage, getTodayUsage } from "../controllers/usage.controller.js";
+import { getTodayUsage } from "../controllers/usage.controller.js";
+import { ingestUsageWithMl } from "../controllers/usage.ml.controller.js";
 import {
   getAnalyticsSummary,
   exportAnalyticsReport,
@@ -31,6 +32,7 @@ import {
   completePlanTask,
 } from "../controllers/detoxPlan.controller.js";
 import { getDashboard } from "../controllers/dashboard.controller.js";
+import { getPlanTargetPreviewWithMl } from "../controllers/planPreview.ml.controller.js";
 import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
@@ -61,7 +63,7 @@ router.delete("/privacy/delete-my-data", protect, deleteMyData);
 router.get("/dashboard", protect, getDashboard);
 
 // Usage
-router.post("/usage/ingest", protect, ingestUsage);
+router.post("/usage/ingest", protect, ingestUsageWithMl);
 router.get("/usage/today", protect, getTodayUsage);
 
 // Analytics
@@ -77,6 +79,9 @@ router.patch(
   protect,
   completePlanTask
 );
+
+// ML Preview
+router.get("/ml/plan-preview", protect, getPlanTargetPreviewWithMl);
 
 // Notifications
 router.get("/notifications", protect, getNotifications);

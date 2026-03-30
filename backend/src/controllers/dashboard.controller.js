@@ -3,6 +3,7 @@ import DetoxPlan from "../models/DetoxPlan.js";
 import Notification from "../models/Notification.js";
 import User from "../models/User.js";
 import UserSettings from "../models/UserSettings.js";
+import AiInsight from "../models/AiInsight.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { formatDayKey, getRangeStart } from "../utils/date.js";
 import { analyzeDailyUsage } from "../services/behavior.service.js";
@@ -125,6 +126,11 @@ export const getDashboard = asyncHandler(async (req, res) => {
     settings,
   });
 
+  const mlInsight = await AiInsight.findOne({
+    user: req.user._id,
+    dayKey: todayKey,
+  }).sort({ createdAt: -1 });
+
   const currentAnalytics = buildAnalytics({
     sessions: currentWeekSessions,
     user: req.user,
@@ -180,13 +186,15 @@ export const getDashboard = asyncHandler(async (req, res) => {
     success: true,
     dashboard: {
       userName: req.user.name,
-      digitalWellnessScore: todayAnalysis.score,
+      digitalWellnessScore: mlInsight?.score ?? todayAnalysis.score,
       improvementVsLastWeek,
       pickups: todayAnalysis.pickups,
       unlocks: todayAnalysis.unlocks,
       streak: req.user.streakCount || 0,
       points: req.user.points || 0,
-      riskLevel: todayAnalysis.riskLevel,
+      riskLevel: mlInsight?.riskLevel || todayAnalysis.riskLevel,
+      predictionSource: mlInsight?.predictionSource || "rule_based_fallback",
+      mlConfidence: Number(mlInsight?.mlConfidence || 0),
       todayScreenTime: todayAnalysis.totalScreenMinutes,
       dailyGoal: settings?.dailyLimitMinutes ?? 180,
       dailyChallenge: buildSettingsDrivenChallenge(settings, pendingTask),

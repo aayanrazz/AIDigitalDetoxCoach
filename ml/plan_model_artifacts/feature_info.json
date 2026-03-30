@@ -1,0 +1,39 @@
+{
+  "numeric_features": [
+    "dailyLimitMinutes",
+    "bedTimeMinutes",
+    "wakeTimeMinutes",
+    "gentleNudgesEnabled",
+    "dailySummariesEnabled",
+    "achievementAlertsEnabled",
+    "limitWarningsEnabled",
+    "googleFitConnected",
+    "sessionCount",
+    "totalScreenMinutes",
+    "socialMinutes",
+    "productivityMinutes",
+    "pickups",
+    "unlocks",
+    "lateNightMinutes",
+    "avgSessionMinutes",
+    "longestSessionMinutes",
+    "peakHour",
+    "sevenDayAvgScreenMinutes",
+    "yesterdayScore",
+    "overLimitMinutes",
+    "score",
+    "overLimitAppsCount",
+    "topExceededMinutes"
+  ],
+  "categorical_features": [
+    "focusPrimary",
+    "focusSecondary",
+    "theme",
+    "riskLevel"
+  ],
+  "target_column": "targetDailyLimitMinutes",
+  "notes": [
+    "This model predicts the next detox target daily limit in minutes.",
+    "Text outputs like task titles and aiInsight are intentionally excluded from this first plan model."
+  ]
+}

@@ -12,6 +12,8 @@ import {
   getLevelProgressFromPoints,
 } from "../services/gamification.service.js";
 import { serializeUser } from "../utils/serialize.js";
+import { buildPlanMlFeaturesForDay } from "../services/ml/planFeatureBuilder.js";
+import { buildPlanTargetInsight } from "../services/ml/planMl.service.js";
 
 async function ensureSettings(userId) {
   let settings = await UserSettings.findOne({ user: userId });
@@ -185,22 +187,39 @@ export const generateDetoxPlan = asyncHandler(async (req, res) => {
     startTime: {
       $gte: addDays(new Date(), -7),
     },
-  });
+  }).lean();
 
   const avgDailyMinutes = getAverageDailyMinutes(
     sessions,
     settings.dailyLimitMinutes || 240
   );
 
+  const { featureRow } = await buildPlanMlFeaturesForDay({
+    user: req.user,
+  });
+
+  const planPrediction = await buildPlanTargetInsight({
+    featureRow,
+    fallbackDailyLimit:
+      Number(settings.dailyLimitMinutes || 0) || avgDailyMinutes || 180,
+  });
+
   await DetoxPlan.updateMany(
     { user: req.user._id, active: true },
     { $set: { active: false } }
   );
 
+  const effectiveScore = Number(
+    featureRow?.score || req.user.detoxScore || 75
+  );
+
   const planData = buildDetoxPlan({
     avgDailyMinutes,
     settings,
-    score: req.user.detoxScore || 75,
+    score: effectiveScore,
+    predictedTargetDailyLimitMinutes:
+      planPrediction.predictedTargetDailyLimitMinutes,
+    planPredictionSource: planPrediction.source,
   });
 
   const plan = await DetoxPlan.create({
@@ -226,6 +245,16 @@ export const generateDetoxPlan = asyncHandler(async (req, res) => {
     success: true,
     message: "Detox plan generated successfully.",
     plan: enrichPlan(plan),
+    planMeta: {
+      targetSource: planPrediction.source,
+      fallbackUsed: planPrediction.fallbackUsed,
+      predictedTargetDailyLimitMinutes:
+        planPrediction.predictedTargetDailyLimitMinutes,
+      effectiveTargetDailyLimitMinutes: plan.targetDailyLimitMinutes,
+      averageRecentDailyMinutes: avgDailyMinutes,
+      scoreUsed: effectiveScore,
+      errorMessage: planPrediction.errorMessage || "",
+    },
   });
 });
 

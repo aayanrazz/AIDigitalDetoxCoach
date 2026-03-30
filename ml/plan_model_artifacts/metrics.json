@@ -1,0 +1,43 @@
+{
+  "test_loss_mse": 8.198715209960938,
+  "test_mae": 1.9941496849060059,
+  "test_rmse": 2.882089066939244,
+  "test_r2": 0.9938715785591765,
+  "train_rows": 10584,
+  "valid_rows": 2268,
+  "test_rows": 2268,
+  "target_column": "targetDailyLimitMinutes",
+  "numeric_features": [
+    "dailyLimitMinutes",
+    "bedTimeMinutes",
+    "wakeTimeMinutes",
+    "gentleNudgesEnabled",
+    "dailySummariesEnabled",
+    "achievementAlertsEnabled",
+    "limitWarningsEnabled",
+    "googleFitConnected",
+    "sessionCount",
+    "totalScreenMinutes",
+    "socialMinutes",
+    "productivityMinutes",
+    "pickups",
+    "unlocks",
+    "lateNightMinutes",
+    "avgSessionMinutes",
+    "longestSessionMinutes",
+    "peakHour",
+    "sevenDayAvgScreenMinutes",
+    "yesterdayScore",
+    "overLimitMinutes",
+    "score",
+    "overLimitAppsCount",
+    "topExceededMinutes"
+  ],
+  "categorical_features": [
+    "focusPrimary",
+    "focusSecondary",
+    "theme",
+    "riskLevel"
+  ],
+  "prediction_note": "Predictions are rounded to integer minutes for practical detox plan use."
+}

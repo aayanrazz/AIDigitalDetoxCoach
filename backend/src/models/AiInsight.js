@@ -15,49 +15,56 @@ const aiInsightSchema = new mongoose.Schema(
     },
     score: {
       type: Number,
-      required: true,
-      min: 0,
-      max: 100,
+      default: 0,
     },
     riskLevel: {
       type: String,
       enum: ["low", "medium", "high"],
-      required: true,
-    },
-    totalScreenMinutes: {
-      type: Number,
-      required: true,
-      default: 0,
-    },
-    pickups: {
-      type: Number,
-      required: true,
-      default: 0,
-    },
-    unlocks: {
-      type: Number,
-      required: true,
-      default: 0,
-    },
-    lateNightMinutes: {
-      type: Number,
-      required: true,
-      default: 0,
-    },
-    reasons: {
-      type: [String],
-      default: [],
+      default: "low",
     },
     recommendations: {
       type: [String],
       default: [],
     },
+    reasons: {
+      type: [String],
+      default: [],
+    },
+    predictionSource: {
+      type: String,
+      enum: ["tensorflow", "rule_based_fallback"],
+      default: "rule_based_fallback",
+    },
+    modelVersion: {
+      type: String,
+      default: "risk-v1",
+    },
+    mlConfidence: {
+      type: Number,
+      default: 0,
+    },
+    classProbabilities: {
+      type: Object,
+      default: {},
+    },
+    featureSnapshot: {
+      type: Object,
+      default: {},
+    },
+    fallbackUsed: {
+      type: Boolean,
+      default: false,
+    },
+    lastCalculatedAt: {
+      type: Date,
+      default: Date.now,
+    },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+  }
 );
 
 aiInsightSchema.index({ user: 1, dayKey: 1 }, { unique: true });
 
-const AiInsight = mongoose.model("AiInsight", aiInsightSchema);
-
-export default AiInsight;
+export default mongoose.model("AiInsight", aiInsightSchema);

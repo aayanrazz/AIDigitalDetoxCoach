@@ -34,6 +34,12 @@ function clampMinutes(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function normalizePredictedTarget(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.round(parsed);
+}
+
 function buildPrimaryFocusTaskTitle(focusAreas = []) {
   const primary = (focusAreas[0] || "Social Media").toLowerCase();
 
@@ -62,6 +68,8 @@ export const buildDetoxPlan = ({
   avgDailyMinutes = 240,
   settings = null,
   score = 75,
+  predictedTargetDailyLimitMinutes = null,
+  planPredictionSource = "rule_based_fallback",
 }) => {
   const focusAreas = settings?.focusAreas?.length
     ? settings.focusAreas
@@ -86,6 +94,7 @@ export const buildDetoxPlan = ({
     60,
     1440
   );
+
   const baseTarget = clampMinutes(
     Math.round(avgDailyMinutes || configuredLimit),
     90,
@@ -93,11 +102,32 @@ export const buildDetoxPlan = ({
   );
 
   const scoreFactor = score < 45 ? 0.68 : score < 70 ? 0.75 : 0.82;
-  const finalTarget = clampMinutes(
+
+  const ruleBasedFinalTarget = clampMinutes(
     Math.round(baseTarget * scoreFactor),
     75,
     baseTarget
   );
+
+  const normalizedMlTarget = normalizePredictedTarget(
+    predictedTargetDailyLimitMinutes
+  );
+
+  const mlSuggestedTarget =
+    normalizedMlTarget === null
+      ? null
+      : clampMinutes(normalizedMlTarget, 75, baseTarget);
+
+  const useMlTarget =
+    planPredictionSource === "tensorflow" && mlSuggestedTarget !== null;
+
+  const finalTarget = useMlTarget
+    ? clampMinutes(
+        Math.round((mlSuggestedTarget + ruleBasedFinalTarget) / 2),
+        75,
+        baseTarget
+      )
+    : ruleBasedFinalTarget;
 
   const primaryFocusTask = buildPrimaryFocusTaskTitle(focusAreas);
   const secondaryFocusTask = buildSecondaryFocusTaskTitle(focusAreas);
@@ -161,16 +191,24 @@ export const buildDetoxPlan = ({
     };
   });
 
-  const aiInsight =
+  const baseInsight =
     score < 45
       ? "High-risk behavior detected. This plan reduces screen time faster and gives stronger focus and sleep protection."
       : score < 70
       ? "Moderate-risk behavior detected. This plan gradually reduces usage while reinforcing your focus areas and daily rhythm."
       : "Stable behavior detected. This plan maintains progress while improving focus, sleep timing, and mindful routines.";
 
+  const aiInsight = useMlTarget
+    ? `${baseInsight} Your daily target was adjusted with the trained plan model for a safer and more personalized reduction.`
+    : baseInsight;
+
+  const targetMethodLabel = useMlTarget ? "ML-assisted" : "rule-based";
+
   const planSummary = `A ${durationDays}-day personalized detox plan built from your ${configuredLimit}-minute daily goal, focus areas (${focusAreas.join(
     ", "
-  )}), and sleep schedule (${wakeTimeLabel} to ${format12Hour(bedTime)}).`;
+  )}), sleep schedule (${wakeTimeLabel} to ${format12Hour(
+    bedTime
+  )}), and an ${targetMethodLabel} target of ${finalTarget} minutes.`;
 
   return {
     startDate,
