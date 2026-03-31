@@ -33,6 +33,7 @@ import {
 } from "../controllers/detoxPlan.controller.js";
 import { getDashboard } from "../controllers/dashboard.controller.js";
 import { getPlanTargetPreviewWithMl } from "../controllers/planPreview.ml.controller.js";
+import { getNotificationPreviewWithMl } from "../controllers/notificationPreview.ml.controller.js";
 import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
@@ -82,6 +83,7 @@ router.patch(
 
 // ML Preview
 router.get("/ml/plan-preview", protect, getPlanTargetPreviewWithMl);
+router.get("/ml/notification-preview", protect, getNotificationPreviewWithMl);
 
 // Notifications
 router.get("/notifications", protect, getNotifications);
