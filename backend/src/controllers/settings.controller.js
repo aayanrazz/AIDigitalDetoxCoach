@@ -2,12 +2,15 @@ import UserSettings from "../models/UserSettings.js";
 import AppLimit from "../models/AppLimit.js";
 import Notification from "../models/Notification.js";
 import UsageSession from "../models/UsageSession.js";
+import AiInsight from "../models/AiInsight.js";
+import DetoxPlan from "../models/DetoxPlan.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { serializeUser } from "../utils/serialize.js";
 
 const PRIVACY_POLICY_VERSION = "v1.0";
 const RETENTION_OPTIONS = [7, 30, 90, 180, 365];
+const ALLOWED_THEMES = ["dark", "light", "system"];
 
 async function ensureSettings(userId) {
   let settings = await UserSettings.findOne({ user: userId });
@@ -53,6 +56,11 @@ function normalizeTime(value, fallback = "23:00") {
   const minutes = Math.max(0, Math.min(59, Number(match[2])));
 
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function normalizeTheme(value, fallback = "dark") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ALLOWED_THEMES.includes(normalized) ? normalized : fallback;
 }
 
 function normalizeNotificationSettings(existing = {}, incoming = {}) {
@@ -112,12 +120,16 @@ function normalizePrivacySettings(existing = {}, incoming = {}) {
     consentGiven,
     consentVersion:
       incoming.consentVersion !== undefined
-        ? String(incoming.consentVersion)
+        ? String(incoming.consentVersion || "").trim() || PRIVACY_POLICY_VERSION
         : existing.consentVersion || PRIVACY_POLICY_VERSION,
     consentedAt:
       incoming.consentedAt !== undefined
         ? incoming.consentedAt
         : existing.consentedAt ?? null,
+    withdrawnAt:
+      incoming.withdrawnAt !== undefined
+        ? incoming.withdrawnAt
+        : existing.withdrawnAt ?? null,
     policyLastViewedAt:
       incoming.policyLastViewedAt !== undefined
         ? incoming.policyLastViewedAt
@@ -126,6 +138,10 @@ function normalizePrivacySettings(existing = {}, incoming = {}) {
       incoming.deletionRequestedAt !== undefined
         ? incoming.deletionRequestedAt
         : existing.deletionRequestedAt ?? null,
+    lastRetentionCleanupAt:
+      incoming.lastRetentionCleanupAt !== undefined
+        ? incoming.lastRetentionCleanupAt
+        : existing.lastRetentionCleanupAt ?? null,
   };
 }
 
@@ -184,7 +200,7 @@ function buildPrivacyPolicyPayload(settings) {
     retentionOptions: RETENTION_OPTIONS,
     securityPractices: [
       "Usage exports can be anonymized before sharing.",
-      "Delete-my-data removes stored usage sessions, notifications, and app limits from the backend.",
+      "Delete-my-data removes stored usage sessions, app limits, notifications, AI insights, and detox plans from the backend.",
       "Production deployment should use HTTPS so data is encrypted in transit.",
       "Sensitive secrets should stay in environment variables on the server.",
     ],
@@ -296,7 +312,7 @@ export const updateSettings = asyncHandler(async (req, res) => {
   }
 
   if (theme !== undefined) {
-    settings.theme = theme;
+    settings.theme = normalizeTheme(theme, settings.theme || "dark");
   }
 
   await req.user.save();
@@ -484,14 +500,24 @@ export const savePrivacyConsent = asyncHandler(async (req, res) => {
     retentionDays,
   } = req.body;
 
+  const previousConsent = Boolean(settings?.privacySettings?.consentGiven);
+  const nextConsent = Boolean(consentGiven);
+
   const normalized = normalizePrivacySettings(settings.privacySettings || {}, {
-    consentGiven,
+    consentGiven: nextConsent,
     dataCollection,
     anonymizeData,
     allowAnalyticsForTraining,
     retentionDays,
     consentVersion: PRIVACY_POLICY_VERSION,
-    consentedAt: Boolean(consentGiven) ? new Date() : null,
+    consentedAt: nextConsent
+      ? settings?.privacySettings?.consentedAt || new Date()
+      : null,
+    withdrawnAt: nextConsent
+      ? null
+      : previousConsent
+      ? new Date()
+      : settings?.privacySettings?.withdrawnAt || null,
     policyLastViewedAt: new Date(),
   });
 
@@ -512,29 +538,37 @@ export const deleteMyData = asyncHandler(async (req, res) => {
     UsageSession.deleteMany({ user: req.user._id }),
     AppLimit.deleteMany({ user: req.user._id }),
     Notification.deleteMany({ user: req.user._id }),
+    AiInsight.deleteMany({ user: req.user._id }),
+    DetoxPlan.deleteMany({ user: req.user._id }),
   ]);
 
   const settings = await ensureSettings(req.user._id);
 
-  settings.privacySettings = normalizePrivacySettings(settings.privacySettings || {}, {
-    consentGiven: false,
-    dataCollection: false,
-    anonymizeData: true,
-    allowAnalyticsForTraining: false,
-    consentedAt: null,
-    deletionRequestedAt: new Date(),
-  });
+  settings.privacySettings = normalizePrivacySettings(
+    settings.privacySettings || {},
+    {
+      consentGiven: false,
+      dataCollection: false,
+      anonymizeData: true,
+      allowAnalyticsForTraining: false,
+      consentedAt: null,
+      withdrawnAt: new Date(),
+      deletionRequestedAt: new Date(),
+    }
+  );
 
   await settings.save();
 
   res.json({
     success: true,
     message:
-      "Stored usage data, app limits, and notifications were deleted successfully.",
+      "Stored usage data, app limits, notifications, AI insights, and detox plans were deleted successfully.",
     deleted: {
       usageSessions: true,
       appLimits: true,
       notifications: true,
+      aiInsights: true,
+      detoxPlans: true,
     },
     privacySettings: settings.privacySettings,
   });

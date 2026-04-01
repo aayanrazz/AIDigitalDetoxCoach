@@ -30,6 +30,10 @@ const normalizeRange = (value) => {
   return "week";
 };
 
+const normalizeExportFormat = (value) => {
+  return value === "csv" ? "csv" : "json";
+};
+
 const toStartOfDay = (dateLike) => {
   const d = new Date(dateLike);
   d.setHours(0, 0, 0, 0);
@@ -86,12 +90,14 @@ const buildAnalyticsBundle = ({
     endDate,
   });
 
+  const { previousStart, previousEnd } = getPreviousWindow(startDate);
+
   const previousAnalytics = buildAnalytics({
     sessions: previousSessions,
     user,
     range,
-    startDate: getPreviousWindow(startDate).previousStart,
-    endDate: getPreviousWindow(startDate).previousEnd,
+    startDate: previousStart,
+    endDate: previousEnd,
   });
 
   const comparison = buildAnalyticsComparison(analytics, previousAnalytics);
@@ -111,17 +117,20 @@ const buildEpisodeLabels = ({ sessions = [], settings = {}, startDate }) => {
 
   for (const session of sessions) {
     const dayKey = session.dayKey || formatDayKey(session.startTime);
+
     if (!sessionsByDay.has(dayKey)) {
       sessionsByDay.set(dayKey, []);
     }
+
     sessionsByDay.get(dayKey).push(session);
   }
 
-  const episodeLabels = Array.from(sessionsByDay.entries())
+  return Array.from(sessionsByDay.entries())
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([dayKey, daySessions], index) => {
       const analysis = analyzeDailyUsage({ sessions: daySessions, settings });
       const dayStart = daySessions[0]?.startTime || dayKey;
+
       const overLimitMinutes = Math.max(
         0,
         Number(analysis.totalScreenMinutes || 0) -
@@ -164,8 +173,6 @@ const buildEpisodeLabels = ({ sessions = [], settings = {}, startDate }) => {
           : "",
       };
     });
-
-  return episodeLabels;
 };
 
 const buildSessionRows = ({
@@ -202,6 +209,23 @@ const buildSessionRows = ({
         linkedEpisode?.isAddictiveBehaviorEpisode || 0,
     };
   });
+};
+
+const getSafeSettings = async (userId) => {
+  const settings = await UserSettings.findOne({ user: userId }).lean();
+
+  return (
+    settings || {
+      dailyLimitMinutes: 240,
+      notificationSettings: {},
+      privacySettings: {
+        consentGiven: false,
+        anonymizeData: true,
+        allowAnalyticsForTraining: false,
+        retentionDays: 30,
+      },
+    }
+  );
 };
 
 export const getAnalyticsSummary = asyncHandler(async (req, res) => {
@@ -277,19 +301,40 @@ export const exportAnalyticsReport = asyncHandler(async (req, res) => {
 
 export const exportAnonymizedDataset = asyncHandler(async (req, res) => {
   const range = normalizeRange(req.query.range || "month");
+  const format = normalizeExportFormat(req.query.format);
   const startDate = getRangeStart(range);
   const endDate = new Date();
+
+  const settings = await getSafeSettings(req.user._id);
+  const privacySettings = settings?.privacySettings || {};
+
+  if (
+    !privacySettings.consentGiven ||
+    !privacySettings.allowAnalyticsForTraining
+  ) {
+    return res.status(403).json({
+      success: false,
+      message:
+        "Anonymized dataset export is disabled until the user gives consent and allows analytics for training.",
+      privacy: {
+        consentGiven: Boolean(privacySettings.consentGiven),
+        allowAnalyticsForTraining: Boolean(
+          privacySettings.allowAnalyticsForTraining
+        ),
+        anonymizeData: Boolean(
+          privacySettings.anonymizeData !== undefined
+            ? privacySettings.anonymizeData
+            : true
+        ),
+        retentionDays: Number(privacySettings.retentionDays || 30),
+      },
+    });
+  }
 
   const sessions = await UsageSession.find({
     user: req.user._id,
     startTime: { $gte: startDate, $lte: endDate },
   }).sort({ startTime: 1 });
-
-  const settings =
-    (await UserSettings.findOne({ user: req.user._id }).lean()) || {
-      dailyLimitMinutes: 240,
-      notificationSettings: {},
-    };
 
   const episodeLabels = buildEpisodeLabels({
     sessions,
@@ -348,7 +393,7 @@ export const exportAnonymizedDataset = asyncHandler(async (req, res) => {
     generatedAt: new Date(),
     dataset: {
       range,
-      format: req.query.format === "csv" ? "csv" : "json",
+      format,
       summary: {
         sessionCount: sessionRows.length,
         episodeCount: episodeLabels.length,
@@ -360,7 +405,18 @@ export const exportAnonymizedDataset = asyncHandler(async (req, res) => {
           "Exact user identity fields are excluded.",
           "Day tokens are relative labels such as D1, D2, D3 instead of calendar dates.",
           "Episode labels are generated from simple rule-based risk detection for later model training.",
+          "Export is allowed only when privacy consent and training consent are enabled.",
         ],
+      },
+      privacy: {
+        consentGiven: true,
+        allowAnalyticsForTraining: true,
+        anonymizeData: Boolean(
+          privacySettings.anonymizeData !== undefined
+            ? privacySettings.anonymizeData
+            : true
+        ),
+        retentionDays: Number(privacySettings.retentionDays || 30),
       },
       sessionRows,
       episodeLabels,

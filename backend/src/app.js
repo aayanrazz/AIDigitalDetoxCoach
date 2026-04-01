@@ -13,6 +13,7 @@ import { errorHandler } from "./middleware/errorHandler.js";
 const app = express();
 
 app.enable("trust proxy");
+
 app.use(helmet());
 app.use(compression());
 
@@ -28,7 +29,9 @@ if (env.NODE_ENV === "production") {
     const forwardedProto = req.headers["x-forwarded-proto"];
     const isSecure = req.secure || forwardedProto === "https";
 
-    if (isSecure) return next();
+    if (isSecure) {
+      return next();
+    }
 
     return res.status(400).json({
       success: false,

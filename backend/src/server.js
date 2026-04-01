@@ -10,7 +10,13 @@ const startServer = async () => {
     startPrivacyRetentionJob();
 
     app.listen(env.PORT, () => {
-      console.log(`🚀 Server running on http://localhost:${env.PORT}`);
+      console.log(
+        `🚀 Server running on ${
+          env.NODE_ENV === "production"
+            ? `port ${env.PORT}`
+            : `http://localhost:${env.PORT}`
+        }`
+      );
     });
   } catch (error) {
     console.error("❌ Failed to start server:", error.message);
