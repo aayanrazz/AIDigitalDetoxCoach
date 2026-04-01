@@ -9,6 +9,14 @@ import { buildNotificationMlFeaturesForDay } from "../services/ml/notificationFe
 import { buildNotificationInsight } from "../services/ml/notificationMl.service.js";
 
 const BLOCKED_PACKAGES = ["com.google.android.apps.nexuslauncher"];
+const NOTIFICATION_DEDUPE_MINUTES = 20;
+const DEBUG_ML_INGEST = process.env.DEBUG_ML_INGEST === "true";
+
+const debugLog = (...args) => {
+  if (DEBUG_ML_INGEST) {
+    console.log(...args);
+  }
+};
 
 const createMlNotification = async ({
   userId,
@@ -18,6 +26,25 @@ const createMlNotification = async ({
   cta = null,
   metadata = {},
 }) => {
+  const recentThreshold = new Date(
+    Date.now() - NOTIFICATION_DEDUPE_MINUTES * 60 * 1000
+  );
+
+  const existingRecent = await Notification.findOne({
+    user: userId,
+    type,
+    title,
+    "metadata.generatedBy": "notification_ml",
+    createdAt: { $gte: recentThreshold },
+  }).lean();
+
+  if (existingRecent) {
+    return {
+      _id: existingRecent._id,
+      skippedDuplicate: true,
+    };
+  }
+
   const created = await Notification.create({
     user: userId,
     type,
@@ -26,26 +53,6 @@ const createMlNotification = async ({
     ...(cta ? { cta } : {}),
     metadata,
   });
-
-  const reloaded = await Notification.findById(created._id).lean();
-
-  console.log(
-    "NOTIFICATION WRITE TARGET:",
-    JSON.stringify(
-      {
-        dbName: Notification.db?.name,
-        collectionName: Notification.collection?.collectionName,
-        insertedId: String(created._id),
-      },
-      null,
-      2
-    )
-  );
-
-  console.log(
-    "SAVED NOTIFICATION DOCUMENT:",
-    JSON.stringify(reloaded, null, 2)
-  );
 
   return created;
 };
@@ -59,7 +66,7 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
     if (!appPackage) continue;
     if (BLOCKED_PACKAGES.includes(appPackage)) continue;
 
-    const source = item.source || "native_bridge";
+    const source = String(item.source || "native_bridge").trim();
     const dayKey = item.dayKey || formatDayKey(item.startTime || new Date());
     const key = `${String(userId)}__${dayKey}__${appPackage}__${source}`;
 
@@ -72,9 +79,9 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
       appName: item.appName || appPackage,
       appPackage,
       category: item.category || "Other",
-      durationMinutes: Number(item.durationMinutes || 0),
-      pickups: Number(item.pickups || 0),
-      unlocks: Number(item.unlocks || 0),
+      durationMinutes: Math.max(0, Number(item.durationMinutes || 0)),
+      pickups: Math.max(0, Number(item.pickups || 0)),
+      unlocks: Math.max(0, Number(item.unlocks || 0)),
       startTime,
       endTime,
       hourBucket: Number(
@@ -125,6 +132,41 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
   }
 
   return Array.from(merged.values());
+};
+
+const upsertUsageSessions = async ({ sessions = [], userId }) => {
+  if (!sessions.length) return;
+
+  const operations = sessions.map((session) => ({
+    updateOne: {
+      filter: {
+        user: userId,
+        dayKey: session.dayKey,
+        appPackage: session.appPackage,
+        source: session.source,
+      },
+      update: {
+        $set: {
+          user: userId,
+          dayKey: session.dayKey,
+          appName: session.appName,
+          appPackage: session.appPackage,
+          category: session.category,
+          durationMinutes: session.durationMinutes,
+          pickups: session.pickups,
+          unlocks: session.unlocks,
+          startTime: session.startTime,
+          endTime: session.endTime,
+          hourBucket: session.hourBucket,
+          source: session.source,
+          platform: session.platform || "android",
+        },
+      },
+      upsert: true,
+    },
+  }));
+
+  await UsageSession.bulkWrite(operations, { ordered: false });
 };
 
 const applyNotificationSafeguards = ({
@@ -226,6 +268,7 @@ const createNotificationsFromMlPrediction = async ({
       id: notification._id,
       title,
       kind: "limit_warning",
+      skippedDuplicate: Boolean(notification.skippedDuplicate),
     });
   }
 
@@ -260,17 +303,25 @@ const createNotificationsFromMlPrediction = async ({
       id: notification._id,
       title,
       kind: "sleep",
+      skippedDuplicate: Boolean(notification.skippedDuplicate),
     });
   }
 
   return created;
 };
 
-export const ingestUsageWithMl = asyncHandler(async (req, res) => {
-  console.log("ML INGEST HIT");
-  console.log("REQ USER ID:", req.user?._id);
-  console.log("REQ BODY:", JSON.stringify(req.body, null, 2));
+const getAnalysisDate = (normalizedSessions = []) => {
+  if (!normalizedSessions.length) {
+    return new Date();
+  }
 
+  return normalizedSessions.reduce((latest, session) => {
+    const sessionDate = new Date(session.startTime || new Date());
+    return sessionDate > latest ? sessionDate : latest;
+  }, new Date(normalizedSessions[0].startTime || new Date()));
+};
+
+export const ingestUsageWithMl = asyncHandler(async (req, res) => {
   const payloadSessions = Array.isArray(req.body.sessions)
     ? req.body.sessions
     : [];
@@ -314,36 +365,12 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
     });
   }
 
-  const uniqueDayKeys = [
-    ...new Set(normalizedSessions.map((item) => item.dayKey)),
-  ];
-  const uniqueSources = [
-    ...new Set(normalizedSessions.map((item) => item.source)),
-  ];
-
-  await UsageSession.deleteMany({
-    user: req.user._id,
-    dayKey: { $in: uniqueDayKeys },
-    source: { $in: uniqueSources },
+  await upsertUsageSessions({
+    sessions: normalizedSessions,
+    userId: req.user._id,
   });
 
-  await UsageSession.insertMany(normalizedSessions, { ordered: true });
-
-  const analysisDate =
-    normalizedSessions.length > 0
-      ? new Date(
-          normalizedSessions
-            .map((session) => new Date(session.startTime || new Date()))
-            .sort((a, b) => b - a)[0]
-        )
-      : new Date();
-
-  console.log("ML ANALYSIS DATE:", analysisDate.toISOString());
-  console.log("ML ANALYSIS DAY KEY:", formatDayKey(analysisDate));
-  console.log(
-    "INGESTED NORMALIZED SESSIONS:",
-    JSON.stringify(normalizedSessions, null, 2)
-  );
+  const analysisDate = getAnalysisDate(normalizedSessions);
 
   const { dayKey, settings, dailyAnalysis, featureRow } =
     await buildMlFeaturesForDay({
@@ -352,10 +379,8 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
       sessions: normalizedSessions,
     });
 
-  console.log(
-    "ML FEATURE ROW USED FOR RISK:",
-    JSON.stringify(featureRow, null, 2)
-  );
+  debugLog("ML ANALYSIS DAY KEY:", dayKey);
+  debugLog("ML FEATURE ROW USED FOR RISK:", featureRow);
 
   const mlInsight = await buildMlInsight({
     featureRow,
@@ -365,27 +390,29 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
   await AiInsight.findOneAndUpdate(
     { user: req.user._id, dayKey },
     {
-      user: req.user._id,
-      dayKey,
-      score: Number(dailyAnalysis.score || 0),
-      riskLevel: mlInsight.riskLevel,
-      recommendations: Array.isArray(dailyAnalysis.recommendations)
-        ? dailyAnalysis.recommendations
-        : [],
-      reasons: Array.isArray(dailyAnalysis.reasons)
-        ? dailyAnalysis.reasons
-        : [],
-      predictionSource: mlInsight.source,
-      modelVersion: process.env.ML_MODEL_VERSION || "risk-v1",
-      mlConfidence: Number(mlInsight.confidence || 0),
-      classProbabilities: mlInsight.classProbabilities || {},
-      featureSnapshot: featureRow,
-      fallbackUsed: Boolean(mlInsight.fallbackUsed),
-      lastCalculatedAt: new Date(),
+      $set: {
+        user: req.user._id,
+        dayKey,
+        score: Number(dailyAnalysis.score || 0),
+        riskLevel: mlInsight.riskLevel,
+        recommendations: Array.isArray(dailyAnalysis.recommendations)
+          ? dailyAnalysis.recommendations
+          : [],
+        reasons: Array.isArray(dailyAnalysis.reasons)
+          ? dailyAnalysis.reasons
+          : [],
+        predictionSource: mlInsight.source,
+        modelVersion: process.env.ML_MODEL_VERSION || "risk-v1",
+        mlConfidence: Number(mlInsight.confidence || 0),
+        classProbabilities: mlInsight.classProbabilities || {},
+        featureSnapshot: featureRow,
+        fallbackUsed: Boolean(mlInsight.fallbackUsed),
+        lastCalculatedAt: new Date(),
+      },
     },
     {
       upsert: true,
-      returnDocument: "after",
+      new: true,
       setDefaultsOnInsert: true,
     }
   );
@@ -399,19 +426,14 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
   const effectiveSettings = notificationFeatures?.settings || settings;
   const notificationFeatureRow = notificationFeatures?.featureRow || {};
 
-  console.log(
+  debugLog(
     "ML FEATURE ROW USED FOR NOTIFICATIONS:",
-    JSON.stringify(notificationFeatureRow, null, 2)
+    notificationFeatureRow
   );
 
   const rawNotificationPrediction = await buildNotificationInsight({
     featureRow: notificationFeatureRow,
   });
-
-  console.log(
-    "RAW NOTIFICATION PREDICTION:",
-    JSON.stringify(rawNotificationPrediction, null, 2)
-  );
 
   const notificationPrediction = applyNotificationSafeguards({
     notificationPrediction: rawNotificationPrediction,
@@ -420,11 +442,6 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
     featureRow: notificationFeatureRow,
   });
 
-  console.log(
-    "SAFEGUARDED NOTIFICATION PREDICTION:",
-    JSON.stringify(notificationPrediction, null, 2)
-  );
-
   const createdNotifications = await createNotificationsFromMlPrediction({
     userId: req.user._id,
     notificationPrediction,
@@ -432,21 +449,21 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
     featureRow: notificationFeatureRow,
   });
 
-  console.log(
-    "CREATED ML NOTIFICATIONS:",
-    JSON.stringify(createdNotifications, null, 2)
-  );
-
   res.json({
     success: true,
     message: "Usage ingested and ML prediction completed.",
+    syncMeta: {
+      sessionsReceived: payloadSessions.length,
+      sessionsNormalized: normalizedSessions.length,
+      dayKey,
+    },
     analysis: {
-      score: dailyAnalysis.score,
+      score: Number(dailyAnalysis.score || 0),
       riskLevel: mlInsight.riskLevel,
       predictionSource: mlInsight.source,
-      mlConfidence: mlInsight.confidence,
-      fallbackUsed: mlInsight.fallbackUsed,
-      totalScreenMinutes: dailyAnalysis.totalScreenMinutes,
+      mlConfidence: Number(mlInsight.confidence || 0),
+      fallbackUsed: Boolean(mlInsight.fallbackUsed),
+      totalScreenMinutes: Number(dailyAnalysis.totalScreenMinutes || 0),
       overLimitMinutes: Math.max(
         0,
         Number(dailyAnalysis.totalScreenMinutes || 0) -
@@ -457,8 +474,8 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
       dominantNotificationType:
         notificationPrediction.dominantNotificationType,
       predictionSource: notificationPrediction.source,
-      fallbackUsed: notificationPrediction.fallbackUsed,
-      confidence: notificationPrediction.confidence,
+      fallbackUsed: Boolean(notificationPrediction.fallbackUsed),
+      confidence: Number(notificationPrediction.confidence || 0),
       safeguardApplied: Boolean(notificationPrediction.safeguardApplied),
       sendLimitWarning: Boolean(notificationPrediction.sendLimitWarning),
       sendSleepNudge: Boolean(notificationPrediction.sendSleepNudge),

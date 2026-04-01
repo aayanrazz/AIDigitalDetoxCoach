@@ -21,7 +21,9 @@ function normalizeSession(userId, session) {
   let endTime = Number.isNaN(rawEnd.getTime()) ? new Date(startTime) : rawEnd;
 
   if (endTime <= startTime) {
-    endTime = new Date(startTime.getTime() + Math.max(1, safeDurationMinutes) * 60_000);
+    endTime = new Date(
+      startTime.getTime() + Math.max(1, safeDurationMinutes) * 60_000
+    );
   }
 
   const appName = String(session?.appName || "").trim();
@@ -48,7 +50,10 @@ function normalizeSession(userId, session) {
     platform: session?.platform || "android",
     source: session?.source || "native_bridge",
     dayKey,
-    hourBucket: startTime.getHours(),
+    hourBucket:
+      session?.hourBucket !== undefined
+        ? Number(session.hourBucket)
+        : startTime.getHours(),
   };
 }
 
@@ -57,15 +62,18 @@ function mapAppsPayloadToSessions(userId, apps = []) {
 
   return apps
     .map((app, index) => {
-      const packageName = String(app?.packageName || app?.appPackage || "").trim();
+      const packageName = String(
+        app?.packageName || app?.appPackage || ""
+      ).trim();
       const appName = String(app?.appName || packageName).trim();
 
       const minutes = Math.max(
         0,
         Number(
           app?.minutesUsed ??
-            Math.round(Number(app?.foregroundMs || 0) / 60000) ??
-            0
+            (app?.foregroundMs !== undefined
+              ? Math.round(Number(app.foregroundMs || 0) / 60000)
+              : 0)
         )
       );
 
@@ -116,21 +124,57 @@ async function ensureUserSettings(userId) {
   return settings;
 }
 
-async function createUnreadNotificationIfNeeded(userId, item) {
-  const exists = await Notification.findOne({
-    user: userId,
-    title: item.title,
-    isRead: false,
-  });
+async function createUnreadNotificationsIfNeeded(userId, items = []) {
+  if (!items.length) return;
 
-  if (!exists) {
-    await Notification.create({
+  const uniqueItems = [];
+  const seenKeys = new Set();
+
+  for (const item of items) {
+    const title = String(item?.title || "").trim();
+    const body = String(item?.body || "").trim();
+    const type = String(item?.type || "summary").trim();
+
+    if (!title || !body) continue;
+
+    const key = `${type}__${title}`;
+    if (seenKeys.has(key)) continue;
+
+    seenKeys.add(key);
+    uniqueItems.push({
+      type,
+      title,
+      body,
+      cta: item?.cta,
+    });
+  }
+
+  if (!uniqueItems.length) return;
+
+  const existingUnread = await Notification.find({
+    user: userId,
+    isRead: false,
+    title: { $in: uniqueItems.map((item) => item.title) },
+  })
+    .select("title type")
+    .lean();
+
+  const existingKeys = new Set(
+    existingUnread.map((item) => `${item.type}__${item.title}`)
+  );
+
+  const docsToInsert = uniqueItems
+    .filter((item) => !existingKeys.has(`${item.type}__${item.title}`))
+    .map((item) => ({
       user: userId,
       type: item.type,
       title: item.title,
       body: item.body,
       cta: item.cta,
-    });
+    }));
+
+  if (docsToInsert.length) {
+    await Notification.insertMany(docsToInsert, { ordered: false });
   }
 }
 
@@ -147,7 +191,9 @@ function buildTodayUsagePayload({
     focusScore: Number(analysis.score || 0),
     riskLevel: analysis.riskLevel || aiInsight?.riskLevel || "low",
     sessions: todaySessions.map((session) => serializeUsageSession(session)),
-    topApps: todaySessions.slice(0, 5).map((session) => serializeUsageSession(session)),
+    topApps: todaySessions
+      .slice(0, 5)
+      .map((session) => serializeUsageSession(session)),
     appLimitSummary: {
       monitoredApps: appLimitSummary.monitoredApps || [],
       exceededApps: appLimitSummary.exceededApps || [],
@@ -159,7 +205,9 @@ function buildTodayUsagePayload({
 }
 
 export const ingestUsage = asyncHandler(async (req, res) => {
-  const sessionsPayload = Array.isArray(req.body?.sessions) ? req.body.sessions : [];
+  const sessionsPayload = Array.isArray(req.body?.sessions)
+    ? req.body.sessions
+    : [];
   const appsPayload = Array.isArray(req.body?.apps) ? req.body.apps : [];
 
   if (sessionsPayload.length === 0 && appsPayload.length === 0) {
@@ -195,21 +243,25 @@ export const ingestUsage = asyncHandler(async (req, res) => {
 
   const todayKey = formatDayKey();
 
-  const todaySessions = await UsageSession.find({
-    user: req.user._id,
-    dayKey: todayKey,
-  }).sort({ durationMinutes: -1, appName: 1 });
-
-  const settings = await ensureUserSettings(req.user._id);
+  const [todaySessions, settings, appLimits] = await Promise.all([
+    UsageSession.find({
+      user: req.user._id,
+      dayKey: todayKey,
+    })
+      .sort({ durationMinutes: -1, appName: 1 })
+      .lean(),
+    ensureUserSettings(req.user._id),
+    AppLimit.find({ user: req.user._id })
+      .sort({
+        dailyLimitMinutes: 1,
+        appName: 1,
+      })
+      .lean(),
+  ]);
 
   const analysis = analyzeDailyUsage({
     sessions: todaySessions,
     settings,
-  });
-
-  const appLimits = await AppLimit.find({ user: req.user._id }).sort({
-    dailyLimitMinutes: 1,
-    appName: 1,
   });
 
   const appLimitSummary = evaluateAppLimits({
@@ -221,31 +273,33 @@ export const ingestUsage = asyncHandler(async (req, res) => {
   const aiInsight = await AiInsight.findOneAndUpdate(
     { user: req.user._id, dayKey: todayKey },
     {
-      user: req.user._id,
-      dayKey: todayKey,
-      score: analysis.score,
-      riskLevel: analysis.riskLevel,
-      totalScreenMinutes: analysis.totalScreenMinutes,
-      pickups: analysis.pickups,
-      unlocks: analysis.unlocks,
-      lateNightMinutes: analysis.lateNightMinutes,
-      reasons: [
-        ...analysis.reasons,
-        ...appLimitSummary.exceededApps.map(
-          (item) =>
-            `${item.appName} exceeded its daily limit by ${item.exceededMinutes} minutes.`
-        ),
-      ],
-      recommendations: [
-        ...analysis.recommendations,
-        ...appLimitSummary.exceededApps.map(
-          (item) =>
-            `Reduce ${item.appName} by at least ${Math.min(
-              item.exceededMinutes,
-              20
-            )} minutes tomorrow.`
-        ),
-      ],
+      $set: {
+        user: req.user._id,
+        dayKey: todayKey,
+        score: Number(analysis.score || 0),
+        riskLevel: analysis.riskLevel,
+        totalScreenMinutes: Number(analysis.totalScreenMinutes || 0),
+        pickups: Number(analysis.pickups || 0),
+        unlocks: Number(analysis.unlocks || 0),
+        lateNightMinutes: Number(analysis.lateNightMinutes || 0),
+        reasons: [
+          ...analysis.reasons,
+          ...appLimitSummary.exceededApps.map(
+            (item) =>
+              `${item.appName} exceeded its daily limit by ${item.exceededMinutes} minutes.`
+          ),
+        ],
+        recommendations: [
+          ...analysis.recommendations,
+          ...appLimitSummary.exceededApps.map(
+            (item) =>
+              `Reduce ${item.appName} by at least ${Math.min(
+                item.exceededMinutes,
+                20
+              )} minutes tomorrow.`
+          ),
+        ],
+      },
     },
     {
       new: true,
@@ -254,7 +308,7 @@ export const ingestUsage = asyncHandler(async (req, res) => {
     }
   );
 
-  req.user.detoxScore = analysis.score;
+  req.user.detoxScore = Number(analysis.score || 0);
   await req.user.save();
 
   const allNotifications = [
@@ -262,9 +316,7 @@ export const ingestUsage = asyncHandler(async (req, res) => {
     ...appLimitSummary.notifications,
   ];
 
-  for (const item of allNotifications) {
-    await createUnreadNotificationIfNeeded(req.user._id, item);
-  }
+  await createUnreadNotificationsIfNeeded(req.user._id, allNotifications);
 
   const todayUsage = buildTodayUsagePayload({
     todayKey,
@@ -279,12 +331,12 @@ export const ingestUsage = asyncHandler(async (req, res) => {
     message: "Usage sessions synced successfully.",
     syncedCount: normalized.length,
     analysis: {
-      score: analysis.score,
+      score: Number(analysis.score || 0),
       riskLevel: analysis.riskLevel,
-      totalScreenMinutes: analysis.totalScreenMinutes,
-      pickups: analysis.pickups,
-      unlocks: analysis.unlocks,
-      lateNightMinutes: analysis.lateNightMinutes,
+      totalScreenMinutes: Number(analysis.totalScreenMinutes || 0),
+      pickups: Number(analysis.pickups || 0),
+      unlocks: Number(analysis.unlocks || 0),
+      lateNightMinutes: Number(analysis.lateNightMinutes || 0),
       reasons: analysis.reasons,
       recommendations: aiInsight?.recommendations || analysis.recommendations,
     },
@@ -298,26 +350,29 @@ export const ingestUsage = asyncHandler(async (req, res) => {
 export const getTodayUsage = asyncHandler(async (req, res) => {
   const todayKey = formatDayKey();
 
-  const sessions = await UsageSession.find({
-    user: req.user._id,
-    dayKey: todayKey,
-  }).sort({ durationMinutes: -1, appName: 1 });
-
-  const settings = await ensureUserSettings(req.user._id);
+  const [sessions, settings, aiInsight, appLimits] = await Promise.all([
+    UsageSession.find({
+      user: req.user._id,
+      dayKey: todayKey,
+    })
+      .sort({ durationMinutes: -1, appName: 1 })
+      .lean(),
+    ensureUserSettings(req.user._id),
+    AiInsight.findOne({
+      user: req.user._id,
+      dayKey: todayKey,
+    }).lean(),
+    AppLimit.find({ user: req.user._id })
+      .sort({
+        dailyLimitMinutes: 1,
+        appName: 1,
+      })
+      .lean(),
+  ]);
 
   const analysis = analyzeDailyUsage({
     sessions,
     settings,
-  });
-
-  const aiInsight = await AiInsight.findOne({
-    user: req.user._id,
-    dayKey: todayKey,
-  });
-
-  const appLimits = await AppLimit.find({ user: req.user._id }).sort({
-    dailyLimitMinutes: 1,
-    appName: 1,
   });
 
   const appLimitSummary = evaluateAppLimits({
