@@ -1,0 +1,10 @@
+               precision    recall  f1-score   support
+
+         both       0.99      0.96      0.98       142
+limit_warning       0.96      0.99      0.98       238
+         none       1.00      0.98      0.99      1654
+        sleep       0.91      1.00      0.96       234
+
+     accuracy                           0.99      2268
+    macro avg       0.97      0.98      0.97      2268
+ weighted avg       0.99      0.99      0.99      2268

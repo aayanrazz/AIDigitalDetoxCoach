@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 
+const PRIVACY_RETENTION_OPTIONS = [7, 30, 90, 180, 365];
+
 const userSettingsSchema = new mongoose.Schema(
   {
     user: {
@@ -29,8 +31,21 @@ const userSettingsSchema = new mongoose.Schema(
       limitWarnings: { type: Boolean, default: true },
     },
     privacySettings: {
-      dataCollection: { type: Boolean, default: true },
+      dataCollection: { type: Boolean, default: false },
       anonymizeData: { type: Boolean, default: true },
+      allowAnalyticsForTraining: { type: Boolean, default: false },
+      retentionDays: {
+        type: Number,
+        enum: PRIVACY_RETENTION_OPTIONS,
+        default: 30,
+      },
+      consentGiven: { type: Boolean, default: false },
+      consentVersion: { type: String, default: "v1.0", trim: true },
+      consentedAt: { type: Date, default: null },
+      withdrawnAt: { type: Date, default: null },
+      policyLastViewedAt: { type: Date, default: null },
+      deletionRequestedAt: { type: Date, default: null },
+      lastRetentionCleanupAt: { type: Date, default: null },
     },
     integrations: {
       googleFitConnected: { type: Boolean, default: false },

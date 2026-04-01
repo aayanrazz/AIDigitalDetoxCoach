@@ -1,0 +1,36 @@
+{
+  "numeric_features": [
+    "dailyLimitMinutes",
+    "bedTimeMinutes",
+    "wakeTimeMinutes",
+    "gentleNudgesEnabled",
+    "dailySummariesEnabled",
+    "achievementAlertsEnabled",
+    "limitWarningsEnabled",
+    "sessionCount",
+    "totalScreenMinutes",
+    "socialMinutes",
+    "productivityMinutes",
+    "pickups",
+    "unlocks",
+    "lateNightMinutes",
+    "sevenDayAvgScreenMinutes",
+    "yesterdayScore",
+    "overLimitMinutes",
+    "score",
+    "overLimitAppsCount",
+    "topExceededMinutes"
+  ],
+  "categorical_features": [
+    "focusPrimary",
+    "focusSecondary",
+    "riskLevel"
+  ],
+  "target_column": "dominantNotificationType",
+  "label_classes": [
+    "both",
+    "limit_warning",
+    "none",
+    "sleep"
+  ]
+}

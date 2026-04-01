@@ -1,10 +1,13 @@
 import app from "./app.js";
 import { connectDB } from "./config/db.js";
 import { env } from "./config/env.js";
+import { startPrivacyRetentionJob } from "./jobs/privacyRetention.job.js";
 
 const startServer = async () => {
   try {
     await connectDB();
+
+    startPrivacyRetentionJob();
 
     app.listen(env.PORT, () => {
       console.log(`🚀 Server running on http://localhost:${env.PORT}`);

@@ -1,0 +1,113 @@
+{
+  "test_loss": 0.03812485933303833,
+  "test_accuracy": 0.9850088357925415,
+  "plain_accuracy_score": 0.9850088183421517,
+  "macro_f1": 0.974267639507806,
+  "weighted_f1": 0.9851977061220027,
+  "classes": [
+    "both",
+    "limit_warning",
+    "none",
+    "sleep"
+  ],
+  "classification_report": {
+    "both": {
+      "precision": 0.9856115107913669,
+      "recall": 0.9647887323943662,
+      "f1-score": 0.9750889679715302,
+      "support": 142.0
+    },
+    "limit_warning": {
+      "precision": 0.9631147540983607,
+      "recall": 0.9873949579831933,
+      "f1-score": 0.975103734439834,
+      "support": 238.0
+    },
+    "none": {
+      "precision": 0.9993861264579497,
+      "recall": 0.9842805320435308,
+      "f1-score": 0.9917758148035334,
+      "support": 1654.0
+    },
+    "sleep": {
+      "precision": 0.9140625,
+      "recall": 1.0,
+      "f1-score": 0.9551020408163265,
+      "support": 234.0
+    },
+    "accuracy": 0.9850088183421517,
+    "macro avg": {
+      "precision": 0.9655437228369194,
+      "recall": 0.9841160556052726,
+      "f1-score": 0.974267639507806,
+      "support": 2268.0
+    },
+    "weighted avg": {
+      "precision": 0.9859142081874923,
+      "recall": 0.9850088183421517,
+      "f1-score": 0.9851977061220027,
+      "support": 2268.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      137,
+      3,
+      0,
+      2
+    ],
+    [
+      2,
+      235,
+      1,
+      0
+    ],
+    [
+      0,
+      6,
+      1628,
+      20
+    ],
+    [
+      0,
+      0,
+      0,
+      234
+    ]
+  ],
+  "train_rows": 10584,
+  "valid_rows": 2268,
+  "test_rows": 2268,
+  "target_column": "dominantNotificationType",
+  "numeric_features": [
+    "dailyLimitMinutes",
+    "bedTimeMinutes",
+    "wakeTimeMinutes",
+    "gentleNudgesEnabled",
+    "dailySummariesEnabled",
+    "achievementAlertsEnabled",
+    "limitWarningsEnabled",
+    "sessionCount",
+    "totalScreenMinutes",
+    "socialMinutes",
+    "productivityMinutes",
+    "pickups",
+    "unlocks",
+    "lateNightMinutes",
+    "sevenDayAvgScreenMinutes",
+    "yesterdayScore",
+    "overLimitMinutes",
+    "score",
+    "overLimitAppsCount",
+    "topExceededMinutes"
+  ],
+  "categorical_features": [
+    "focusPrimary",
+    "focusSecondary",
+    "riskLevel"
+  ],
+  "notes": [
+    "This model predicts the dominant notification strategy for the day.",
+    "Classes include none, limit_warning, sleep, and both."
+  ]
+}
