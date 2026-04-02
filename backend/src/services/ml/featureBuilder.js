@@ -5,18 +5,9 @@ import { formatDayKey, getRangeStart } from "../../utils/date.js";
 import { analyzeDailyUsage } from "../../services/behavior.service.js";
 import { buildAnalytics } from "../../services/analytics.service.js";
 
-const CATEGORY_KEYS = [
-  "Social",
-  "Communication",
-  "Productivity",
-  "Education",
-  "Streaming",
-  "Gaming",
-  "Other",
-];
-
 const CATEGORY_FIELD_MAP = {
   Social: "socialMinutes",
+  "Social Media": "socialMinutes",
   Communication: "communicationMinutes",
   Productivity: "productivityMinutes",
   Education: "educationMinutes",
@@ -35,6 +26,33 @@ const clampNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const toEnabledFlag = (value, defaultValue = true) => {
+  if (value === undefined || value === null) {
+    return defaultValue ? 1 : 0;
+  }
+
+  return value === false ? 0 : 1;
+};
+
+const normalizeCategory = (value = "") => {
+  const raw = String(value || "").trim();
+
+  if (CATEGORY_FIELD_MAP[raw]) {
+    return raw;
+  }
+
+  const lower = raw.toLowerCase();
+
+  if (lower.includes("social")) return "Social Media";
+  if (lower.includes("commun")) return "Communication";
+  if (lower.includes("product")) return "Productivity";
+  if (lower.includes("educat")) return "Education";
+  if (lower.includes("stream")) return "Streaming";
+  if (lower.includes("game")) return "Gaming";
+
+  return "Other";
+};
+
 const getTopExceededMinutes = (sessions = [], appLimits = []) => {
   if (!Array.isArray(appLimits) || appLimits.length === 0) return 0;
 
@@ -43,6 +61,7 @@ const getTopExceededMinutes = (sessions = [], appLimits = []) => {
   for (const session of sessions) {
     const pkg = String(session.appPackage || "").trim();
     if (!pkg) continue;
+
     minutesByPackage.set(
       pkg,
       (minutesByPackage.get(pkg) || 0) + clampNumber(session.durationMinutes, 0)
@@ -53,9 +72,10 @@ const getTopExceededMinutes = (sessions = [], appLimits = []) => {
 
   for (const appLimit of appLimits) {
     const pkg = String(appLimit.appPackage || "").trim();
-    const limitMinutes = clampNumber(appLimit.limitMinutes, 0);
+    const limitMinutes = clampNumber(appLimit.dailyLimitMinutes, 0);
     const usedMinutes = minutesByPackage.get(pkg) || 0;
     const exceeded = Math.max(0, usedMinutes - limitMinutes);
+
     maxExceeded = Math.max(maxExceeded, exceeded);
   }
 
@@ -70,6 +90,7 @@ const getOverLimitAppsCount = (sessions = [], appLimits = []) => {
   for (const session of sessions) {
     const pkg = String(session.appPackage || "").trim();
     if (!pkg) continue;
+
     minutesByPackage.set(
       pkg,
       (minutesByPackage.get(pkg) || 0) + clampNumber(session.durationMinutes, 0)
@@ -80,9 +101,12 @@ const getOverLimitAppsCount = (sessions = [], appLimits = []) => {
 
   for (const appLimit of appLimits) {
     const pkg = String(appLimit.appPackage || "").trim();
-    const limitMinutes = clampNumber(appLimit.limitMinutes, 0);
+    const limitMinutes = clampNumber(appLimit.dailyLimitMinutes, 0);
     const usedMinutes = minutesByPackage.get(pkg) || 0;
-    if (usedMinutes > limitMinutes) count += 1;
+
+    if (usedMinutes > limitMinutes) {
+      count += 1;
+    }
   }
 
   return count;
@@ -100,10 +124,9 @@ const getCategoryMinutes = (sessions = []) => {
   };
 
   for (const session of sessions) {
-    const category = CATEGORY_KEYS.includes(session.category)
-      ? session.category
-      : "Other";
-    const key = CATEGORY_FIELD_MAP[category] || "otherMinutes";
+    const normalizedCategory = normalizeCategory(session.category);
+    const key = CATEGORY_FIELD_MAP[normalizedCategory] || "otherMinutes";
+
     totals[key] += clampNumber(session.durationMinutes, 0);
   }
 
@@ -150,17 +173,18 @@ const getLongestSessionMinutes = (sessions = []) => {
 
 const getSevenDayAverage = async (userId) => {
   const weekStart = getRangeStart("week");
+  const now = new Date();
 
   const sessions = await UsageSession.find({
     user: userId,
-    startTime: { $gte: weekStart, $lte: new Date() },
+    startTime: { $gte: weekStart, $lte: now },
   }).lean();
 
   const analytics = buildAnalytics({
     sessions,
     range: "week",
     startDate: weekStart,
-    endDate: new Date(),
+    endDate: now,
   });
 
   return clampNumber(analytics.averageDailyMinutes, 0);
@@ -225,14 +249,22 @@ export const buildMlFeaturesForDay = async ({
     wakeTimeMinutes: toMinutesFromHHMM(
       settings?.sleepSchedule?.wakeTime || "07:00"
     ),
-    gentleNudgesEnabled:
-      settings?.notificationSettings?.gentleNudges === false ? 0 : 1,
-    dailySummariesEnabled:
-      settings?.notificationSettings?.dailySummaries === true ? 1 : 0,
-    achievementAlertsEnabled:
-      settings?.notificationSettings?.achievementAlerts === false ? 0 : 1,
-    limitWarningsEnabled:
-      settings?.notificationSettings?.usageLimitWarnings === false ? 0 : 1,
+    gentleNudgesEnabled: toEnabledFlag(
+      settings?.notificationSettings?.gentleNudges,
+      true
+    ),
+    dailySummariesEnabled: toEnabledFlag(
+      settings?.notificationSettings?.dailySummaries,
+      true
+    ),
+    achievementAlertsEnabled: toEnabledFlag(
+      settings?.notificationSettings?.achievementAlerts,
+      true
+    ),
+    limitWarningsEnabled: toEnabledFlag(
+      settings?.notificationSettings?.limitWarnings,
+      true
+    ),
     googleFitConnected: settings?.integrations?.googleFitConnected ? 1 : 0,
     focusPrimary,
     focusSecondary,

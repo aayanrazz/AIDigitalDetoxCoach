@@ -3,10 +3,14 @@ import DetoxPlan from "../models/DetoxPlan.js";
 import Notification from "../models/Notification.js";
 import User from "../models/User.js";
 import UserSettings from "../models/UserSettings.js";
+import AppLimit from "../models/AppLimit.js";
 import AiInsight from "../models/AiInsight.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { formatDayKey, getRangeStart } from "../utils/date.js";
-import { analyzeDailyUsage } from "../services/behavior.service.js";
+import {
+  analyzeDailyUsage,
+  evaluateAppLimits,
+} from "../services/behavior.service.js";
 import { buildAnalytics } from "../services/analytics.service.js";
 import {
   getLevelProgressFromPoints,
@@ -84,6 +88,31 @@ function buildSettingsDrivenRecommendations(settings, todayAnalysis) {
   return Array.from(new Set(recommendations)).slice(0, 6);
 }
 
+function buildInterventionMessage(appLimitSummary = {}) {
+  const exceededCount = Number(appLimitSummary?.exceededCount || 0);
+  const topExceededApp = appLimitSummary?.topExceededApp || null;
+
+  if (exceededCount <= 0) {
+    return "";
+  }
+
+  if (!topExceededApp?.appName) {
+    return exceededCount === 1
+      ? "One tracked app is over its daily limit today."
+      : `${exceededCount} tracked apps are over their daily limits today.`;
+  }
+
+  const exceededMinutes = Number(topExceededApp.exceededMinutes || 0);
+
+  if (exceededCount === 1) {
+    return `${topExceededApp.appName} is ${exceededMinutes} minutes over its daily limit. Take a short break or close it for now.`;
+  }
+
+  return `${topExceededApp.appName} is ${exceededMinutes} minutes over its daily limit, and ${
+    exceededCount - 1
+  } more tracked app${exceededCount - 1 === 1 ? "" : "s"} also exceeded today.`;
+}
+
 export const getDashboard = asyncHandler(async (req, res) => {
   let settings = await UserSettings.findOne({ user: req.user._id });
 
@@ -96,6 +125,8 @@ export const getDashboard = asyncHandler(async (req, res) => {
     user: req.user._id,
     dayKey: todayKey,
   });
+
+  const appLimits = await AppLimit.find({ user: req.user._id }).lean();
 
   const weekStart = getRangeStart("week");
   const now = new Date();
@@ -125,6 +156,14 @@ export const getDashboard = asyncHandler(async (req, res) => {
     sessions: todaySessions,
     settings,
   });
+
+  const appLimitSummary = evaluateAppLimits({
+    sessions: todaySessions,
+    appLimits,
+    limitWarningsEnabled: settings?.notificationSettings?.limitWarnings !== false,
+  });
+
+  const topExceededApp = appLimitSummary.topExceededApp || null;
 
   const mlInsight = await AiInsight.findOne({
     user: req.user._id,
@@ -203,6 +242,10 @@ export const getDashboard = asyncHandler(async (req, res) => {
         todayAnalysis
       ),
       unreadNotifications,
+      overLimitAppsCount: Number(appLimitSummary.exceededCount || 0),
+      topExceededAppName: topExceededApp?.appName || "",
+      topExceededMinutes: Number(topExceededApp?.exceededMinutes || 0),
+      interventionMessage: buildInterventionMessage(appLimitSummary),
       leaderboard,
       currentLevelNumber: levelProgress.level?.number || 1,
       currentLevelTitle: levelProgress.level?.title || "Mindful Seed",

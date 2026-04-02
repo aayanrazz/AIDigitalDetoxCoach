@@ -8,7 +8,39 @@ import { buildMlInsight } from "../services/ml/ml.service.js";
 import { buildNotificationMlFeaturesForDay } from "../services/ml/notificationFeatureBuilder.js";
 import { buildNotificationInsight } from "../services/ml/notificationMl.service.js";
 
-const BLOCKED_PACKAGES = ["com.google.android.apps.nexuslauncher"];
+const BLOCKED_PACKAGE_EXACT = new Set([
+  "android",
+  "com.google.android.apps.nexuslauncher",
+  "com.android.launcher",
+  "com.android.launcher3",
+  "com.android.permissioncontroller",
+  "com.google.android.permissioncontroller",
+  "com.google.android.overlay.modules.permissioncontroller",
+  "com.samsung.android.app.launcher",
+  "com.sec.android.app.launcher",
+  "com.miui.home",
+  "com.oneplus.launcher",
+  "com.oppo.launcher",
+  "com.vivo.launcher",
+  "com.realme.launcher",
+  "com.huawei.android.launcher",
+  "com.transsion.hilauncher",
+]);
+
+const BLOCKED_PACKAGE_PREFIXES = [
+  "com.android.systemui",
+  "com.android.permissioncontroller",
+  "com.google.android.permissioncontroller",
+  "com.google.android.overlay.modules.permissioncontroller",
+];
+
+const BLOCKED_NAME_FRAGMENTS = [
+  "launcher",
+  "pixel launcher",
+  "system ui",
+  "permission controller",
+];
+
 const NOTIFICATION_DEDUPE_MINUTES = 20;
 const DEBUG_ML_INGEST = process.env.DEBUG_ML_INGEST === "true";
 
@@ -16,6 +48,51 @@ const debugLog = (...args) => {
   if (DEBUG_ML_INGEST) {
     console.log(...args);
   }
+};
+
+const normalizeCategory = (value = "Other") => {
+  const raw = String(value || "").trim();
+  const lower = raw.toLowerCase();
+
+  if (lower.includes("social")) return "Social Media";
+  if (lower.includes("stream")) return "Streaming";
+  if (lower.includes("product")) return "Productivity";
+  if (lower.includes("game")) return "Gaming";
+  if (lower.includes("educat")) return "Education";
+  if (lower.includes("commun")) return "Communication";
+
+  return raw || "Other";
+};
+
+const isIgnoredUsageEntry = ({ appPackage = "", appName = "" }) => {
+  const normalizedPackage = String(appPackage || "").trim().toLowerCase();
+  const normalizedName = String(appName || "").trim().toLowerCase();
+
+  if (!normalizedPackage) {
+    return true;
+  }
+
+  if (BLOCKED_PACKAGE_EXACT.has(normalizedPackage)) {
+    return true;
+  }
+
+  if (
+    BLOCKED_PACKAGE_PREFIXES.some((prefix) =>
+      normalizedPackage.startsWith(prefix)
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    BLOCKED_NAME_FRAGMENTS.some((fragment) =>
+      normalizedName.includes(fragment)
+    )
+  ) {
+    return true;
+  }
+
+  return false;
 };
 
 const createMlNotification = async ({
@@ -62,9 +139,9 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
 
   for (const item of payloadSessions) {
     const appPackage = String(item.appPackage || "").trim();
+    const appName = String(item.appName || appPackage).trim();
 
-    if (!appPackage) continue;
-    if (BLOCKED_PACKAGES.includes(appPackage)) continue;
+    if (isIgnoredUsageEntry({ appPackage, appName })) continue;
 
     const source = String(item.source || "native_bridge").trim();
     const dayKey = item.dayKey || formatDayKey(item.startTime || new Date());
@@ -76,9 +153,9 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
     const incoming = {
       user: userId,
       dayKey,
-      appName: item.appName || appPackage,
+      appName,
       appPackage,
-      category: item.category || "Other",
+      category: normalizeCategory(item.category || "Other"),
       durationMinutes: Math.max(0, Number(item.durationMinutes || 0)),
       pickups: Math.max(0, Number(item.pickups || 0)),
       unlocks: Math.max(0, Number(item.unlocks || 0)),
