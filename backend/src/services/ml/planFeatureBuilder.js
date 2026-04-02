@@ -25,18 +25,26 @@ export const buildPlanMlFeaturesForDay = async ({
   const existingInsight = await AiInsight.findOne({
     user: user._id,
     dayKey: base.dayKey,
-  }).lean();
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const baseRow = base?.featureRow || {};
 
   const score = clampNumber(
     existingInsight?.score,
-    clampNumber(base.dailyAnalysis?.score, 0)
+    clampNumber(base?.dailyAnalysis?.score, 0)
   );
 
   const riskLevel =
-    existingInsight?.riskLevel || base.dailyAnalysis?.riskLevel || "low";
+    String(
+      existingInsight?.riskLevel ||
+        base?.dailyAnalysis?.riskLevel ||
+        "low"
+    ).trim() || "low";
 
   const featureRow = {
-    ...base.featureRow,
+    ...baseRow,
     score,
     riskLevel,
   };

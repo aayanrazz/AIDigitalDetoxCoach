@@ -4,6 +4,7 @@ import UsageSession from "../../models/UsageSession.js";
 import { formatDayKey, getRangeStart } from "../../utils/date.js";
 import { analyzeDailyUsage } from "../../services/behavior.service.js";
 import { buildAnalytics } from "../../services/analytics.service.js";
+import { filterUsageSessions } from "../../utils/usageSessionFilters.js";
 
 const CATEGORY_FIELD_MAP = {
   Social: "socialMinutes",
@@ -175,10 +176,12 @@ const getSevenDayAverage = async (userId) => {
   const weekStart = getRangeStart("week");
   const now = new Date();
 
-  const sessions = await UsageSession.find({
+  const rawSessions = await UsageSession.find({
     user: userId,
     startTime: { $gte: weekStart, $lte: now },
   }).lean();
+
+  const sessions = filterUsageSessions(rawSessions);
 
   const analytics = buildAnalytics({
     sessions,
@@ -195,10 +198,12 @@ const getYesterdayScore = async (userId, settings, currentDay) => {
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayKey = formatDayKey(yesterday);
 
-  const yesterdaySessions = await UsageSession.find({
+  const rawYesterdaySessions = await UsageSession.find({
     user: userId,
     dayKey: yesterdayKey,
   }).lean();
+
+  const yesterdaySessions = filterUsageSessions(rawYesterdaySessions);
 
   if (!yesterdaySessions.length) return 0;
 
@@ -222,9 +227,11 @@ export const buildMlFeaturesForDay = async ({
 
   const dayKey = formatDayKey(date);
 
-  const daySessions = sessions
+  const rawDaySessions = sessions
     ? sessions
     : await UsageSession.find({ user: user._id, dayKey }).lean();
+
+  const daySessions = filterUsageSessions(rawDaySessions);
 
   const dailyAnalysis = analyzeDailyUsage({
     sessions: daySessions,

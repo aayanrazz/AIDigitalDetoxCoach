@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import UsageSession from "../models/UsageSession.js";
 import UserSettings from "../models/UserSettings.js";
+import AiInsight from "../models/AiInsight.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { formatDayKey, getRangeStart, isLateNightHour } from "../utils/date.js";
 import {
@@ -9,6 +10,7 @@ import {
   buildInsightsFromAnalytics,
 } from "../services/analytics.service.js";
 import { analyzeDailyUsage } from "../services/behavior.service.js";
+import { filterUsageSessions } from "../utils/usageSessionFilters.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -78,12 +80,15 @@ const buildAnalyticsBundle = ({
   range,
   sessions,
   previousSessions,
+  aiInsights,
+  previousAiInsights,
   user,
   startDate,
   endDate,
 }) => {
   const analytics = buildAnalytics({
     sessions,
+    aiInsights,
     user,
     range,
     startDate,
@@ -94,6 +99,7 @@ const buildAnalyticsBundle = ({
 
   const previousAnalytics = buildAnalytics({
     sessions: previousSessions,
+    aiInsights: previousAiInsights,
     user,
     range,
     startDate: previousStart,
@@ -228,6 +234,29 @@ const getSafeSettings = async (userId) => {
   );
 };
 
+const loadFilteredSessions = async ({ userId, startDate, endDate }) => {
+  const sessions = await UsageSession.find({
+    user: userId,
+    startTime: { $gte: startDate, $lte: endDate },
+  })
+    .sort({ startTime: 1 })
+    .lean();
+
+  return filterUsageSessions(sessions);
+};
+
+const loadAiInsights = async ({ userId, startDate, endDate }) => {
+  const startDayKey = formatDayKey(startDate);
+  const endDayKey = formatDayKey(endDate);
+
+  return AiInsight.find({
+    user: userId,
+    dayKey: { $gte: startDayKey, $lte: endDayKey },
+  })
+    .sort({ dayKey: 1, createdAt: 1 })
+    .lean();
+};
+
 export const getAnalyticsSummary = asyncHandler(async (req, res) => {
   const range = normalizeRange(req.query.range || "week");
   const startDate = getRangeStart(range);
@@ -235,20 +264,36 @@ export const getAnalyticsSummary = asyncHandler(async (req, res) => {
 
   const { previousStart, previousEnd } = getPreviousWindow(startDate);
 
-  const sessions = await UsageSession.find({
-    user: req.user._id,
-    startTime: { $gte: startDate, $lte: endDate },
-  }).sort({ startTime: 1 });
-
-  const previousSessions = await UsageSession.find({
-    user: req.user._id,
-    startTime: { $gte: previousStart, $lt: previousEnd },
-  }).sort({ startTime: 1 });
+  const [sessions, previousSessions, aiInsights, previousAiInsights] =
+    await Promise.all([
+      loadFilteredSessions({
+        userId: req.user._id,
+        startDate,
+        endDate,
+      }),
+      loadFilteredSessions({
+        userId: req.user._id,
+        startDate: previousStart,
+        endDate: previousEnd,
+      }),
+      loadAiInsights({
+        userId: req.user._id,
+        startDate,
+        endDate,
+      }),
+      loadAiInsights({
+        userId: req.user._id,
+        startDate: previousStart,
+        endDate: previousEnd,
+      }),
+    ]);
 
   const { analytics, insights } = buildAnalyticsBundle({
     range,
     sessions,
     previousSessions,
+    aiInsights,
+    previousAiInsights,
     user: req.user,
     startDate,
     endDate,
@@ -269,20 +314,36 @@ export const exportAnalyticsReport = asyncHandler(async (req, res) => {
 
   const { previousStart, previousEnd } = getPreviousWindow(startDate);
 
-  const sessions = await UsageSession.find({
-    user: req.user._id,
-    startTime: { $gte: startDate, $lte: endDate },
-  }).sort({ startTime: 1 });
-
-  const previousSessions = await UsageSession.find({
-    user: req.user._id,
-    startTime: { $gte: previousStart, $lt: previousEnd },
-  }).sort({ startTime: 1 });
+  const [sessions, previousSessions, aiInsights, previousAiInsights] =
+    await Promise.all([
+      loadFilteredSessions({
+        userId: req.user._id,
+        startDate,
+        endDate,
+      }),
+      loadFilteredSessions({
+        userId: req.user._id,
+        startDate: previousStart,
+        endDate: previousEnd,
+      }),
+      loadAiInsights({
+        userId: req.user._id,
+        startDate,
+        endDate,
+      }),
+      loadAiInsights({
+        userId: req.user._id,
+        startDate: previousStart,
+        endDate: previousEnd,
+      }),
+    ]);
 
   const { analytics, insights } = buildAnalyticsBundle({
     range,
     sessions,
     previousSessions,
+    aiInsights,
+    previousAiInsights,
     user: req.user,
     startDate,
     endDate,
@@ -331,10 +392,11 @@ export const exportAnonymizedDataset = asyncHandler(async (req, res) => {
     });
   }
 
-  const sessions = await UsageSession.find({
-    user: req.user._id,
-    startTime: { $gte: startDate, $lte: endDate },
-  }).sort({ startTime: 1 });
+  const sessions = await loadFilteredSessions({
+    userId: req.user._id,
+    startDate,
+    endDate,
+  });
 
   const episodeLabels = buildEpisodeLabels({
     sessions,
@@ -405,6 +467,7 @@ export const exportAnonymizedDataset = asyncHandler(async (req, res) => {
           "Exact user identity fields are excluded.",
           "Day tokens are relative labels such as D1, D2, D3 instead of calendar dates.",
           "Episode labels are generated from simple rule-based risk detection for later model training.",
+          "System apps and launcher noise are removed from analytics exports.",
           "Export is allowed only when privacy consent and training consent are enabled.",
         ],
       },

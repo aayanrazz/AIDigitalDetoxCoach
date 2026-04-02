@@ -95,6 +95,20 @@ const isIgnoredUsageEntry = ({ appPackage = "", appName = "" }) => {
   return false;
 };
 
+const toSafeNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const resolveBestScore = (mlInsight, dailyAnalysis) => {
+  const mlScore = toSafeNumber(mlInsight?.score, NaN);
+  if (Number.isFinite(mlScore)) {
+    return mlScore;
+  }
+
+  return toSafeNumber(dailyAnalysis?.score, 0);
+};
+
 const createMlNotification = async ({
   userId,
   title,
@@ -148,7 +162,7 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
     const key = `${String(userId)}__${dayKey}__${appPackage}__${source}`;
 
     const startTime = item.startTime ? new Date(item.startTime) : new Date();
-    const endTime = item.endTime ? new Date(item.endTime) : undefined;
+    const endTime = item.endTime ? new Date(item.endTime) : new Date(startTime);
 
     const incoming = {
       user: userId,
@@ -156,13 +170,14 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
       appName,
       appPackage,
       category: normalizeCategory(item.category || "Other"),
-      durationMinutes: Math.max(0, Number(item.durationMinutes || 0)),
-      pickups: Math.max(0, Number(item.pickups || 0)),
-      unlocks: Math.max(0, Number(item.unlocks || 0)),
+      durationMinutes: Math.max(0, toSafeNumber(item.durationMinutes, 0)),
+      pickups: Math.max(0, toSafeNumber(item.pickups, 0)),
+      unlocks: Math.max(0, toSafeNumber(item.unlocks, 0)),
       startTime,
       endTime,
-      hourBucket: Number(
-        item.hourBucket ?? new Date(item.startTime || new Date()).getHours()
+      hourBucket: toSafeNumber(
+        item.hourBucket ?? new Date(item.startTime || new Date()).getHours(),
+        0
       ),
       source,
       platform: item.platform || "android",
@@ -252,13 +267,13 @@ const applyNotificationSafeguards = ({
   settings,
   featureRow,
 }) => {
-  const dailyLimitMinutes = Number(settings?.dailyLimitMinutes || 180);
-  const totalScreenMinutes = Number(featureRow?.totalScreenMinutes || 0);
-  const overLimitMinutes = Number(
-    featureRow?.overLimitMinutes ??
-      Math.max(0, totalScreenMinutes - dailyLimitMinutes)
+  const dailyLimitMinutes = toSafeNumber(settings?.dailyLimitMinutes, 180);
+  const totalScreenMinutes = toSafeNumber(featureRow?.totalScreenMinutes, 0);
+  const overLimitMinutes = toSafeNumber(
+    featureRow?.overLimitMinutes,
+    Math.max(0, totalScreenMinutes - dailyLimitMinutes)
   );
-  const lateNightMinutes = Number(featureRow?.lateNightMinutes || 0);
+  const lateNightMinutes = toSafeNumber(featureRow?.lateNightMinutes, 0);
 
   const ruleLimitWarning =
     overLimitMinutes >= 10 ||
@@ -293,7 +308,7 @@ const applyNotificationSafeguards = ({
       (!notificationPrediction?.sendSleepNudge && sendSleepNudge),
     source: notificationPrediction?.source || "tensorflow",
     fallbackUsed: Boolean(notificationPrediction?.fallbackUsed),
-    confidence: Number(notificationPrediction?.confidence || 0),
+    confidence: toSafeNumber(notificationPrediction?.confidence, 0),
     classProbabilities: notificationPrediction?.classProbabilities || {},
     errorMessage: notificationPrediction?.errorMessage || "",
   };
@@ -308,10 +323,10 @@ const createNotificationsFromMlPrediction = async ({
   const created = [];
 
   const bedTime = settings?.sleepSchedule?.bedTime || "23:00";
-  const dailyLimitMinutes = Number(settings?.dailyLimitMinutes || 180);
-  const totalScreenMinutes = Number(featureRow?.totalScreenMinutes || 0);
-  const overLimitMinutes = Number(featureRow?.overLimitMinutes || 0);
-  const lateNightMinutes = Number(featureRow?.lateNightMinutes || 0);
+  const dailyLimitMinutes = toSafeNumber(settings?.dailyLimitMinutes, 180);
+  const totalScreenMinutes = toSafeNumber(featureRow?.totalScreenMinutes, 0);
+  const overLimitMinutes = toSafeNumber(featureRow?.overLimitMinutes, 0);
+  const lateNightMinutes = toSafeNumber(featureRow?.lateNightMinutes, 0);
 
   if (notificationPrediction.sendLimitWarning) {
     const title = "Usage limit warning";
@@ -464,13 +479,15 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
     fallbackAnalysis: dailyAnalysis,
   });
 
+  const resolvedScore = resolveBestScore(mlInsight, dailyAnalysis);
+
   await AiInsight.findOneAndUpdate(
     { user: req.user._id, dayKey },
     {
       $set: {
         user: req.user._id,
         dayKey,
-        score: Number(dailyAnalysis.score || 0),
+        score: resolvedScore,
         riskLevel: mlInsight.riskLevel,
         recommendations: Array.isArray(dailyAnalysis.recommendations)
           ? dailyAnalysis.recommendations
@@ -480,7 +497,7 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
           : [],
         predictionSource: mlInsight.source,
         modelVersion: process.env.ML_MODEL_VERSION || "risk-v1",
-        mlConfidence: Number(mlInsight.confidence || 0),
+        mlConfidence: toSafeNumber(mlInsight.confidence, 0),
         classProbabilities: mlInsight.classProbabilities || {},
         featureSnapshot: featureRow,
         fallbackUsed: Boolean(mlInsight.fallbackUsed),
@@ -493,6 +510,9 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
       setDefaultsOnInsert: true,
     }
   );
+
+  req.user.detoxScore = resolvedScore;
+  await req.user.save();
 
   const notificationFeatures = await buildNotificationMlFeaturesForDay({
     user: req.user,
@@ -535,16 +555,16 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
       dayKey,
     },
     analysis: {
-      score: Number(dailyAnalysis.score || 0),
+      score: resolvedScore,
       riskLevel: mlInsight.riskLevel,
       predictionSource: mlInsight.source,
-      mlConfidence: Number(mlInsight.confidence || 0),
+      mlConfidence: toSafeNumber(mlInsight.confidence, 0),
       fallbackUsed: Boolean(mlInsight.fallbackUsed),
-      totalScreenMinutes: Number(dailyAnalysis.totalScreenMinutes || 0),
+      totalScreenMinutes: toSafeNumber(dailyAnalysis.totalScreenMinutes, 0),
       overLimitMinutes: Math.max(
         0,
-        Number(dailyAnalysis.totalScreenMinutes || 0) -
-          Number(settings?.dailyLimitMinutes || 180)
+        toSafeNumber(dailyAnalysis.totalScreenMinutes, 0) -
+          toSafeNumber(settings?.dailyLimitMinutes, 180)
       ),
     },
     notificationMeta: {
@@ -552,7 +572,7 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
         notificationPrediction.dominantNotificationType,
       predictionSource: notificationPrediction.source,
       fallbackUsed: Boolean(notificationPrediction.fallbackUsed),
-      confidence: Number(notificationPrediction.confidence || 0),
+      confidence: toSafeNumber(notificationPrediction.confidence, 0),
       safeguardApplied: Boolean(notificationPrediction.safeguardApplied),
       sendLimitWarning: Boolean(notificationPrediction.sendLimitWarning),
       sendSleepNudge: Boolean(notificationPrediction.sendSleepNudge),

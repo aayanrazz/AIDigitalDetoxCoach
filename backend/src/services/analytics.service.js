@@ -76,9 +76,95 @@ const percentageChange = (current, previous) => {
   return Math.round(((currentValue - previousValue) / previousValue) * 100);
 };
 
+const getDailyUsageSnapshots = (sessions = []) => {
+  const byDay = new Map();
+
+  for (const session of sessions) {
+    const dayKey = session?.dayKey || formatDayKey(session?.startTime || new Date());
+    const startTime = new Date(session?.startTime || new Date());
+    const hour = startTime.getHours();
+
+    if (!byDay.has(dayKey)) {
+      byDay.set(dayKey, {
+        totalScreenMinutes: 0,
+        pickups: 0,
+        lateNightMinutes: 0,
+      });
+    }
+
+    const current = byDay.get(dayKey);
+    const minutes = Number(session?.durationMinutes || 0);
+
+    current.totalScreenMinutes += minutes;
+    current.pickups += Number(session?.pickups || 0);
+
+    if (isLateNightHour(hour)) {
+      current.lateNightMinutes += minutes;
+    }
+  }
+
+  return Array.from(byDay.values());
+};
+
+const getAiInsightScores = (aiInsights = []) => {
+  if (!Array.isArray(aiInsights) || aiInsights.length === 0) {
+    return [];
+  }
+
+  const latestByDay = new Map();
+
+  for (const insight of aiInsights) {
+    const dayKey = String(insight?.dayKey || "").trim();
+    if (!dayKey) continue;
+
+    const existing = latestByDay.get(dayKey);
+    const currentCreatedAt = new Date(insight?.createdAt || insight?.updatedAt || 0).getTime();
+    const existingCreatedAt = new Date(
+      existing?.createdAt || existing?.updatedAt || 0
+    ).getTime();
+
+    if (!existing || currentCreatedAt >= existingCreatedAt) {
+      latestByDay.set(dayKey, insight);
+    }
+  }
+
+  return Array.from(latestByDay.values())
+    .map((insight) => Number(insight?.score))
+    .filter((score) => Number.isFinite(score));
+};
+
+const resolveAnalyticsScore = ({ sessions = [], aiInsights = [] }) => {
+  const aiScores = getAiInsightScores(aiInsights);
+
+  if (aiScores.length > 0) {
+    return Math.round(
+      aiScores.reduce((sum, score) => sum + score, 0) / aiScores.length
+    );
+  }
+
+  const dailySnapshots = getDailyUsageSnapshots(sessions);
+
+  if (dailySnapshots.length === 0) {
+    return 100;
+  }
+
+  const derivedScores = dailySnapshots.map((snapshot) =>
+    deriveScore({
+      totalScreenMinutes: snapshot.totalScreenMinutes,
+      pickups: snapshot.pickups,
+      lateNightMinutes: snapshot.lateNightMinutes,
+    })
+  );
+
+  return Math.round(
+    derivedScores.reduce((sum, score) => sum + score, 0) / derivedScores.length
+  );
+};
+
 export const buildAnalytics = ({
   sessions = [],
   user = null,
+  aiInsights = [],
   range = "week",
   startDate,
   endDate = new Date(),
@@ -138,10 +224,10 @@ export const buildAnalytics = ({
     }));
 
   const maxHourValue = Math.max(...hourlyMap);
-  const peakHour = maxHourValue > 0 ? hourlyMap.findIndex((m) => m === maxHourValue) : 0;
+  const peakHour =
+    maxHourValue > 0 ? hourlyMap.findIndex((m) => m === maxHourValue) : 0;
 
-  const totalDays =
-    range === "day" ? 1 : Math.max(1, trendPoints.length);
+  const totalDays = range === "day" ? 1 : Math.max(1, trendPoints.length);
 
   const averageDailyMinutes =
     totalDays > 0 ? Math.round(totalScreenMinutes / totalDays) : 0;
@@ -156,14 +242,7 @@ export const buildAnalytics = ({
       ? [...activePoints].sort((a, b) => a.minutes - b.minutes)[0]
       : null;
 
-  const derivedScore = deriveScore({
-    totalScreenMinutes,
-    pickups,
-    lateNightMinutes,
-  });
-
-  const score =
-    Number(user?.detoxScore || 0) > 0 ? Number(user.detoxScore) : derivedScore;
+  const score = resolveAnalyticsScore({ sessions, aiInsights });
 
   return {
     totalScreenMinutes,
@@ -260,5 +339,5 @@ export const buildInsightsFromAnalytics = (analytics, comparison) => {
     insights.push("Your digital wellness pattern looks balanced this period.");
   }
 
-  return insights;
+  return insights.slice(0, 5);
 };
