@@ -1,4 +1,5 @@
 import UsageSession from "../models/UsageSession.js";
+import UserSettings from "../models/UserSettings.js";
 import AiInsight from "../models/AiInsight.js";
 import Notification from "../models/Notification.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -100,6 +101,11 @@ const toSafeNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const toSafeDate = (value, fallback = new Date()) => {
+  const parsed = value ? new Date(value) : new Date(fallback);
+  return Number.isNaN(parsed.getTime()) ? new Date(fallback) : parsed;
+};
+
 const resolveBestScore = (mlInsight, dailyAnalysis) => {
   const mlScore = toSafeNumber(mlInsight?.score, NaN);
   if (Number.isFinite(mlScore)) {
@@ -158,11 +164,12 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
     if (isIgnoredUsageEntry({ appPackage, appName })) continue;
 
     const source = String(item.source || "native_bridge").trim();
-    const dayKey = item.dayKey || formatDayKey(item.startTime || new Date());
+    const startTime = toSafeDate(item.startTime, new Date());
+    const dayKey = item.dayKey || formatDayKey(startTime);
     const key = `${String(userId)}__${dayKey}__${appPackage}__${source}`;
 
-    const startTime = item.startTime ? new Date(item.startTime) : new Date();
-    const endTime = item.endTime ? new Date(item.endTime) : new Date(startTime);
+    const endTimeRaw = toSafeDate(item.endTime, startTime);
+    const endTime = endTimeRaw < startTime ? new Date(startTime) : endTimeRaw;
 
     const incoming = {
       user: userId,
@@ -175,10 +182,7 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
       unlocks: Math.max(0, toSafeNumber(item.unlocks, 0)),
       startTime,
       endTime,
-      hourBucket: toSafeNumber(
-        item.hourBucket ?? new Date(item.startTime || new Date()).getHours(),
-        0
-      ),
+      hourBucket: toSafeNumber(item.hourBucket ?? startTime.getHours(), 0),
       source,
       platform: item.platform || "android",
     };
@@ -408,10 +412,70 @@ const getAnalysisDate = (normalizedSessions = []) => {
   }
 
   return normalizedSessions.reduce((latest, session) => {
-    const sessionDate = new Date(session.startTime || new Date());
+    const sessionDate = toSafeDate(session.startTime, new Date());
     return sessionDate > latest ? sessionDate : latest;
-  }, new Date(normalizedSessions[0].startTime || new Date()));
+  }, toSafeDate(normalizedSessions[0]?.startTime, new Date()));
 };
+
+const getPrivacySyncState = async (userId) => {
+  const settings = await UserSettings.findOne({ user: userId })
+    .select("privacySettings")
+    .lean();
+
+  const privacySettings = settings?.privacySettings || {};
+
+  const consentGiven = Boolean(privacySettings.consentGiven);
+  const dataCollection = Boolean(privacySettings.dataCollection);
+
+  return {
+    settingsFound: Boolean(settings),
+    consentGiven,
+    dataCollection,
+    anonymizeData:
+      privacySettings.anonymizeData !== undefined
+        ? Boolean(privacySettings.anonymizeData)
+        : true,
+    allowAnalyticsForTraining: Boolean(
+      privacySettings.allowAnalyticsForTraining
+    ),
+    retentionDays: Number(privacySettings.retentionDays || 30),
+    allowServerSync: consentGiven && dataCollection,
+  };
+};
+
+const buildPrivacyBlockedResponse = ({ payloadCount, privacy }) => ({
+  success: true,
+  message:
+    "Usage sync skipped because privacy consent or data collection is disabled.",
+  syncMeta: {
+    sessionsReceived: payloadCount,
+    sessionsNormalized: 0,
+    dayKey: null,
+    skippedDueToPrivacy: true,
+    privacy,
+  },
+  analysis: {
+    score: 100,
+    riskLevel: "low",
+    predictionSource: "privacy_blocked",
+    mlConfidence: 0,
+    fallbackUsed: true,
+    totalScreenMinutes: 0,
+    overLimitMinutes: 0,
+  },
+  notificationMeta: {
+    dominantNotificationType: "none",
+    predictionSource: "privacy_blocked",
+    fallbackUsed: true,
+    confidence: 0,
+    safeguardApplied: false,
+    sendLimitWarning: false,
+    sendSleepNudge: false,
+    classProbabilities: {},
+    errorMessage: "Usage sync blocked by privacy settings.",
+    createdNotifications: [],
+  },
+});
 
 export const ingestUsageWithMl = asyncHandler(async (req, res) => {
   const payloadSessions = Array.isArray(req.body.sessions)
@@ -424,6 +488,19 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
       .json({ success: false, message: "No usage sessions provided." });
   }
 
+  const privacy = await getPrivacySyncState(req.user._id);
+
+  if (!privacy.allowServerSync) {
+    debugLog("ML INGEST BLOCKED BY PRIVACY SETTINGS:", privacy);
+
+    return res.json(
+      buildPrivacyBlockedResponse({
+        payloadCount: payloadSessions.length,
+        privacy,
+      })
+    );
+  }
+
   const normalizedSessions = normalizeAndMergeSessions({
     payloadSessions,
     userId: req.user._id,
@@ -433,6 +510,13 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
     return res.json({
       success: true,
       message: "No syncable usage sessions found after filtering system apps.",
+      syncMeta: {
+        sessionsReceived: payloadSessions.length,
+        sessionsNormalized: 0,
+        dayKey: null,
+        skippedDueToPrivacy: false,
+        privacy,
+      },
       analysis: {
         score: 100,
         riskLevel: "low",
@@ -489,10 +573,10 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
         dayKey,
         score: resolvedScore,
         riskLevel: mlInsight.riskLevel,
-        recommendations: Array.isArray(dailyAnalysis.recommendations)
+        recommendations: Array.isArray(dailyAnalysis?.recommendations)
           ? dailyAnalysis.recommendations
           : [],
-        reasons: Array.isArray(dailyAnalysis.reasons)
+        reasons: Array.isArray(dailyAnalysis?.reasons)
           ? dailyAnalysis.reasons
           : [],
         predictionSource: mlInsight.source,
@@ -553,6 +637,8 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
       sessionsReceived: payloadSessions.length,
       sessionsNormalized: normalizedSessions.length,
       dayKey,
+      skippedDueToPrivacy: false,
+      privacy,
     },
     analysis: {
       score: resolvedScore,
@@ -560,10 +646,10 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
       predictionSource: mlInsight.source,
       mlConfidence: toSafeNumber(mlInsight.confidence, 0),
       fallbackUsed: Boolean(mlInsight.fallbackUsed),
-      totalScreenMinutes: toSafeNumber(dailyAnalysis.totalScreenMinutes, 0),
+      totalScreenMinutes: toSafeNumber(dailyAnalysis?.totalScreenMinutes, 0),
       overLimitMinutes: Math.max(
         0,
-        toSafeNumber(dailyAnalysis.totalScreenMinutes, 0) -
+        toSafeNumber(dailyAnalysis?.totalScreenMinutes, 0) -
           toSafeNumber(settings?.dailyLimitMinutes, 180)
       ),
     },
