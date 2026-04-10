@@ -12,6 +12,8 @@ import {
   isIgnoredUsageEntry,
   normalizeUsageSession,
   normalizeUsageCategory,
+  getSessionDurationMinutes,
+  toSafeNumber,
 } from "../utils/usageSessionFilters.js";
 
 const NOTIFICATION_DEDUPE_MINUTES = 20;
@@ -21,11 +23,6 @@ const debugLog = (...args) => {
   if (DEBUG_ML_INGEST) {
     console.log(...args);
   }
-};
-
-const toSafeNumber = (value, fallback = 0) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
 };
 
 const toSafeDate = (value, fallback = new Date()) => {
@@ -85,17 +82,7 @@ const mapAppsPayloadToSessions = (apps = []) => {
   const now = Date.now();
 
   return apps.map((app, index) => {
-    const durationMinutes = Math.max(
-      0,
-      toSafeNumber(
-        app?.durationMinutes ??
-          app?.minutesUsed ??
-          (app?.foregroundMs !== undefined
-            ? Math.round(toSafeNumber(app.foregroundMs, 0) / 60000)
-            : 0),
-        0
-      )
-    );
+    const durationMinutes = Math.max(0, getSessionDurationMinutes(app));
 
     const fallbackEnd = new Date(now - index * 1000);
     const endTime = app?.lastTimeUsed
@@ -134,17 +121,7 @@ const sanitizeIncomingSession = ({ item = {}, userId }) => {
 
   const rawStart = toSafeDate(item?.startTime, new Date());
 
-  const durationMinutes = Math.max(
-    0,
-    toSafeNumber(
-      item?.durationMinutes ??
-        item?.minutesUsed ??
-        (item?.foregroundMs !== undefined
-          ? Math.round(toSafeNumber(item.foregroundMs, 0) / 60000)
-          : 0),
-      0
-    )
-  );
+  const durationMinutes = Math.max(0, getSessionDurationMinutes(item));
 
   const rawEnd = item?.endTime
     ? toSafeDate(item.endTime, rawStart)
@@ -223,7 +200,10 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
       existing.endTime = incoming.endTime;
     }
 
-    if (toSafeNumber(incoming.hourBucket, 23) < toSafeNumber(existing.hourBucket, 23)) {
+    if (
+      toSafeNumber(incoming.hourBucket, 23) <
+      toSafeNumber(existing.hourBucket, 23)
+    ) {
       existing.hourBucket = toSafeNumber(incoming.hourBucket, 0);
     }
 
@@ -234,10 +214,7 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
       existing.appName = incomingName || existingName;
     }
 
-    if (
-      (!existing.category || existing.category === "Other") &&
-      incoming.category
-    ) {
+    if ((!existing.category || existing.category === "Other") && incoming.category) {
       existing.category = incoming.category;
     }
 
@@ -515,7 +492,6 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
   }
 
   const payloadCount = sessionsPayload.length || appsPayload.length;
-
   const privacy = await getPrivacySyncState(req.user._id);
 
   if (!privacy.allowServerSync) {
@@ -660,10 +636,7 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
   const effectiveSettings = notificationFeatures?.settings || settings;
   const notificationFeatureRow = notificationFeatures?.featureRow || {};
 
-  debugLog(
-    "ML FEATURE ROW USED FOR NOTIFICATIONS:",
-    notificationFeatureRow
-  );
+  debugLog("ML FEATURE ROW USED FOR NOTIFICATIONS:", notificationFeatureRow);
 
   const rawNotificationPrediction = await buildNotificationInsight({
     featureRow: notificationFeatureRow,

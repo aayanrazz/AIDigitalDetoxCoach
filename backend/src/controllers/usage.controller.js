@@ -14,13 +14,15 @@ import {
   filterUsageSessions,
   normalizeUsageSession,
   normalizeUsageCategory,
+  getSessionDurationMinutes,
+  toSafeNumber,
 } from "../utils/usageSessionFilters.js";
 
 function normalizeSession(userId, session) {
   const rawStart = session?.startTime ? new Date(session.startTime) : new Date();
   const startTime = Number.isNaN(rawStart.getTime()) ? new Date() : rawStart;
 
-  const safeDurationMinutes = Math.max(0, Number(session?.durationMinutes || 0));
+  const safeDurationMinutes = Math.max(0, getSessionDurationMinutes(session));
 
   const rawEnd = session?.endTime ? new Date(session.endTime) : new Date(startTime);
   let endTime = Number.isNaN(rawEnd.getTime()) ? new Date(startTime) : rawEnd;
@@ -37,8 +39,8 @@ function normalizeSession(userId, session) {
     throw new ApiError(400, "Each session must include appPackage.");
   }
 
-  const pickups = Math.max(0, Number(session?.pickups || 0));
-  const unlocks = Math.max(0, Number(session?.unlocks || 0));
+  const pickups = Math.max(0, toSafeNumber(session?.pickups, 0));
+  const unlocks = Math.max(0, toSafeNumber(session?.unlocks, 0));
   const dayKey = session?.dayKey || formatDayKey(startTime);
 
   return normalizeUsageSession({
@@ -56,7 +58,7 @@ function normalizeSession(userId, session) {
     dayKey,
     hourBucket:
       session?.hourBucket !== undefined
-        ? Number(session.hourBucket)
+        ? toSafeNumber(session.hourBucket, startTime.getHours())
         : startTime.getHours(),
   });
 }
@@ -67,28 +69,24 @@ function mapAppsPayloadToSessions(userId, apps = []) {
   return apps.map((app, index) => {
     const packageName = String(app?.packageName || app?.appPackage || "").trim();
 
-    const minutes = Math.max(
-      0,
-      Number(
-        app?.minutesUsed ??
-          (app?.foregroundMs !== undefined
-            ? Math.round(Number(app.foregroundMs || 0) / 60000)
-            : 0)
-      )
-    );
+    const durationMinutes = Math.max(0, getSessionDurationMinutes(app));
 
-    const endTime = new Date(now - index * 1000).toISOString();
+    const fallbackEnd = new Date(now - index * 1000);
+    const endTime = app?.lastTimeUsed
+      ? new Date(toSafeNumber(app.lastTimeUsed, fallbackEnd.getTime())).toISOString()
+      : fallbackEnd.toISOString();
+
     const startTime = new Date(
-      now - index * 1000 - Math.max(1, minutes) * 60_000
+      new Date(endTime).getTime() - Math.max(1, durationMinutes) * 60_000
     ).toISOString();
 
     return normalizeSession(userId, {
       appName: String(app?.appName || "").trim(),
       appPackage: packageName,
       category: String(app?.category || "Other").trim() || "Other",
-      durationMinutes: minutes,
-      pickups: Number(app?.pickups || 0),
-      unlocks: Number(app?.unlocks || 0),
+      durationMinutes,
+      pickups: toSafeNumber(app?.pickups, 0),
+      unlocks: toSafeNumber(app?.unlocks, 0),
       startTime,
       endTime,
       platform: "android",
@@ -102,13 +100,12 @@ function sanitizeUsageSessions(sessions = []) {
     .map((session) => ({
       ...session,
       category: normalizeUsageCategory(session?.category || "Other"),
-      durationMinutes: Math.max(0, Number(session?.durationMinutes || 0)),
-      pickups: Math.max(0, Number(session?.pickups || 0)),
-      unlocks: Math.max(0, Number(session?.unlocks || 0)),
+      durationMinutes: Math.max(0, getSessionDurationMinutes(session)),
+      pickups: Math.max(0, toSafeNumber(session?.pickups, 0)),
+      unlocks: Math.max(0, toSafeNumber(session?.unlocks, 0)),
     }))
     .sort((a, b) => {
-      const durationDiff =
-        Number(b?.durationMinutes || 0) - Number(a?.durationMinutes || 0);
+      const durationDiff = getSessionDurationMinutes(b) - getSessionDurationMinutes(a);
 
       if (durationDiff !== 0) return durationDiff;
 
@@ -121,9 +118,9 @@ function serializeUsageSession(session) {
     appName: String(session?.appName || "").trim(),
     appPackage: String(session?.appPackage || "").trim(),
     category: normalizeUsageCategory(session?.category || "Other"),
-    durationMinutes: Number(session?.durationMinutes || 0),
-    pickups: Number(session?.pickups || 0),
-    unlocks: Number(session?.unlocks || 0),
+    durationMinutes: Math.max(0, getSessionDurationMinutes(session)),
+    pickups: Math.max(0, toSafeNumber(session?.pickups, 0)),
+    unlocks: Math.max(0, toSafeNumber(session?.unlocks, 0)),
     startTime: session?.startTime,
     endTime: session?.endTime,
     platform: session?.platform,
@@ -207,20 +204,24 @@ function buildTodayUsagePayload({
     serializeUsageSession(session)
   );
 
+  const exceededApps = Array.isArray(appLimitSummary?.exceededApps)
+    ? appLimitSummary.exceededApps
+    : [];
+
+  const monitoredApps = Array.isArray(appLimitSummary?.monitoredApps)
+    ? appLimitSummary.monitoredApps
+    : [];
+
   return {
     dayKey: todayKey,
-    totalMinutes: Number(analysis.totalScreenMinutes || 0),
-    focusScore: Number(analysis.score || 0),
-    riskLevel: analysis.riskLevel || aiInsight?.riskLevel || "low",
+    totalMinutes: Number(analysis?.totalScreenMinutes || 0),
+    focusScore: Number(analysis?.score || 0),
+    riskLevel: analysis?.riskLevel || aiInsight?.riskLevel || "low",
     sessions: serializedSessions,
     topApps: serializedSessions.slice(0, 5),
     appLimitSummary: {
-      monitoredApps: Array.isArray(appLimitSummary?.monitoredApps)
-        ? appLimitSummary.monitoredApps
-        : [],
-      exceededApps: Array.isArray(appLimitSummary?.exceededApps)
-        ? appLimitSummary.exceededApps
-        : [],
+      monitoredApps,
+      exceededApps,
       exceededCount: Number(appLimitSummary?.exceededCount || 0),
       topExceededApp: appLimitSummary?.topExceededApp || null,
     },
@@ -301,33 +302,37 @@ export const ingestUsage = asyncHandler(async (req, res) => {
     limitWarningsEnabled: settings?.notificationSettings?.limitWarnings !== false,
   });
 
+  const exceededApps = Array.isArray(appLimitSummary?.exceededApps)
+    ? appLimitSummary.exceededApps
+    : [];
+
   const aiInsight = await AiInsight.findOneAndUpdate(
     { user: req.user._id, dayKey: todayKey },
     {
       $set: {
         user: req.user._id,
         dayKey: todayKey,
-        score: Number(analysis.score || 0),
-        riskLevel: analysis.riskLevel,
-        totalScreenMinutes: Number(analysis.totalScreenMinutes || 0),
-        pickups: Number(analysis.pickups || 0),
-        unlocks: Number(analysis.unlocks || 0),
-        lateNightMinutes: Number(analysis.lateNightMinutes || 0),
+        score: Number(analysis?.score || 0),
+        riskLevel: analysis?.riskLevel || "low",
+        totalScreenMinutes: Number(analysis?.totalScreenMinutes || 0),
+        pickups: Number(analysis?.pickups || 0),
+        unlocks: Number(analysis?.unlocks || 0),
+        lateNightMinutes: Number(analysis?.lateNightMinutes || 0),
         reasons: [
-          ...(Array.isArray(analysis.reasons) ? analysis.reasons : []),
-          ...appLimitSummary.exceededApps.map(
+          ...(Array.isArray(analysis?.reasons) ? analysis.reasons : []),
+          ...exceededApps.map(
             (item) =>
               `${item.appName} exceeded its daily limit by ${item.exceededMinutes} minutes.`
           ),
         ],
         recommendations: [
-          ...(Array.isArray(analysis.recommendations)
+          ...(Array.isArray(analysis?.recommendations)
             ? analysis.recommendations
             : []),
-          ...appLimitSummary.exceededApps.map(
+          ...exceededApps.map(
             (item) =>
               `Reduce ${item.appName} by at least ${Math.min(
-                item.exceededMinutes,
+                Number(item?.exceededMinutes || 0),
                 20
               )} minutes tomorrow.`
           ),
@@ -341,12 +346,12 @@ export const ingestUsage = asyncHandler(async (req, res) => {
     }
   );
 
-  req.user.detoxScore = Number(analysis.score || 0);
+  req.user.detoxScore = Number(analysis?.score || 0);
   await req.user.save();
 
   const allNotifications = [
-    ...(Array.isArray(analysis.notifications) ? analysis.notifications : []),
-    ...(Array.isArray(appLimitSummary.notifications)
+    ...(Array.isArray(analysis?.notifications) ? analysis.notifications : []),
+    ...(Array.isArray(appLimitSummary?.notifications)
       ? appLimitSummary.notifications
       : []),
   ];
@@ -366,15 +371,18 @@ export const ingestUsage = asyncHandler(async (req, res) => {
     message: "Usage sessions synced successfully.",
     syncedCount: normalized.length,
     analysis: {
-      score: Number(analysis.score || 0),
-      riskLevel: analysis.riskLevel,
-      totalScreenMinutes: Number(analysis.totalScreenMinutes || 0),
-      pickups: Number(analysis.pickups || 0),
-      unlocks: Number(analysis.unlocks || 0),
-      lateNightMinutes: Number(analysis.lateNightMinutes || 0),
-      reasons: Array.isArray(analysis.reasons) ? analysis.reasons : [],
+      score: Number(analysis?.score || 0),
+      riskLevel: analysis?.riskLevel || "low",
+      totalScreenMinutes: Number(analysis?.totalScreenMinutes || 0),
+      pickups: Number(analysis?.pickups || 0),
+      unlocks: Number(analysis?.unlocks || 0),
+      lateNightMinutes: Number(analysis?.lateNightMinutes || 0),
+      reasons: Array.isArray(analysis?.reasons) ? analysis.reasons : [],
       recommendations:
-        aiInsight?.recommendations || analysis.recommendations || [],
+        aiInsight?.recommendations ||
+        (Array.isArray(analysis?.recommendations)
+          ? analysis.recommendations
+          : []),
     },
     appLimitSummary: todayUsage.appLimitSummary,
     topApps: todayUsage.topApps,
@@ -437,7 +445,9 @@ export const getTodayUsage = asyncHandler(async (req, res) => {
       score: todayUsage.focusScore,
       riskLevel: todayUsage.riskLevel,
       totalScreenMinutes: todayUsage.totalMinutes,
-      recommendations: analysis.recommendations || [],
+      recommendations: Array.isArray(analysis?.recommendations)
+        ? analysis.recommendations
+        : [],
     },
     todayUsage,
   });

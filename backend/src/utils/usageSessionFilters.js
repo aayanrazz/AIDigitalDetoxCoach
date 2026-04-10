@@ -82,6 +82,11 @@ export const normalizePackageName = (value = '') => {
   return String(value || '').trim().toLowerCase();
 };
 
+export const toSafeNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
 const capitalizeToken = (token = '') => {
   if (!token) return '';
   return token.charAt(0).toUpperCase() + token.slice(1);
@@ -150,6 +155,22 @@ export const normalizeUsageCategory = (value = 'Other') => {
   return raw || 'Other';
 };
 
+export const getSessionDurationMinutes = (session = {}) => {
+  if (session?.durationMinutes !== undefined && session?.durationMinutes !== null) {
+    return Math.max(0, toSafeNumber(session.durationMinutes, 0));
+  }
+
+  if (session?.minutesUsed !== undefined && session?.minutesUsed !== null) {
+    return Math.max(0, toSafeNumber(session.minutesUsed, 0));
+  }
+
+  if (session?.foregroundMs !== undefined && session?.foregroundMs !== null) {
+    return Math.max(0, Math.round(toSafeNumber(session.foregroundMs, 0) / 60000));
+  }
+
+  return 0;
+};
+
 export const isIgnoredUsageEntry = ({ appPackage = '', appName = '' } = {}) => {
   const normalizedPackage = normalizePackageName(appPackage);
   const normalizedName = String(appName || '').trim().toLowerCase();
@@ -190,7 +211,10 @@ export const isIgnoredUsageEntry = ({ appPackage = '', appName = '' } = {}) => {
 };
 
 export const normalizeUsageSession = (session = {}) => {
-  const normalizedPackage = String(session?.appPackage || '').trim();
+  const normalizedPackage = String(
+    session?.appPackage || session?.packageName || ''
+  ).trim();
+
   const normalizedName = normalizeUsageAppName(
     session?.appName,
     normalizedPackage
@@ -201,6 +225,9 @@ export const normalizeUsageSession = (session = {}) => {
     appPackage: normalizedPackage,
     appName: normalizedName,
     category: normalizeUsageCategory(session?.category || 'Other'),
+    durationMinutes: getSessionDurationMinutes(session),
+    pickups: Math.max(0, toSafeNumber(session?.pickups, 0)),
+    unlocks: Math.max(0, toSafeNumber(session?.unlocks, 0)),
   };
 };
 
@@ -230,13 +257,15 @@ export const filterUsageSessions = (sessions = []) => {
 
     const existing = uniqueByPackage.get(key);
 
-    const currentMinutes = Number(session?.minutesUsed || 0);
-    const existingMinutes = Number(existing?.minutesUsed || 0);
+    const currentDuration = getSessionDurationMinutes(session);
+    const existingDuration = getSessionDurationMinutes(existing);
 
-    if (currentMinutes >= existingMinutes) {
+    if (currentDuration >= existingDuration) {
       uniqueByPackage.set(key, session);
     }
   }
 
-  return Array.from(uniqueByPackage.values());
+  return Array.from(uniqueByPackage.values()).sort((a, b) => {
+    return getSessionDurationMinutes(b) - getSessionDurationMinutes(a);
+  });
 };
