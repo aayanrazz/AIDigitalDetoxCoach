@@ -5,9 +5,13 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Always load backend/.env no matter where npm is started from
+const envFile =
+  process.env.NODE_ENV === "test"
+    ? path.resolve(__dirname, "../../.env.test")
+    : path.resolve(__dirname, "../../.env");
+
 dotenv.config({
-  path: path.resolve(__dirname, "../../.env"),
+  path: envFile,
 });
 
 const required = ["MONGODB_URI", "JWT_SECRET"];

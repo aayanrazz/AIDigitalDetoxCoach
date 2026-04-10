@@ -9,7 +9,8 @@
     "start": "node src/server.js",
     "seed": "node src/seeds/seed.js",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --runInBand",
-    "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch"
+    "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch",
+    "test:integration:auth": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --runInBand src/__tests__/integration/auth.integration.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -30,6 +31,7 @@
     "babel-jest": "^29.7.0",
     "cross-env": "^7.0.3",
     "jest": "^29.7.0",
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "supertest": "^7.2.2"
   }
 }

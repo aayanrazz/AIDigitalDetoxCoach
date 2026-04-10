@@ -8,39 +8,11 @@ import { buildMlFeaturesForDay } from "../services/ml/featureBuilder.js";
 import { buildMlInsight } from "../services/ml/ml.service.js";
 import { buildNotificationMlFeaturesForDay } from "../services/ml/notificationFeatureBuilder.js";
 import { buildNotificationInsight } from "../services/ml/notificationMl.service.js";
-
-const BLOCKED_PACKAGE_EXACT = new Set([
-  "android",
-  "com.google.android.apps.nexuslauncher",
-  "com.android.launcher",
-  "com.android.launcher3",
-  "com.android.permissioncontroller",
-  "com.google.android.permissioncontroller",
-  "com.google.android.overlay.modules.permissioncontroller",
-  "com.samsung.android.app.launcher",
-  "com.sec.android.app.launcher",
-  "com.miui.home",
-  "com.oneplus.launcher",
-  "com.oppo.launcher",
-  "com.vivo.launcher",
-  "com.realme.launcher",
-  "com.huawei.android.launcher",
-  "com.transsion.hilauncher",
-]);
-
-const BLOCKED_PACKAGE_PREFIXES = [
-  "com.android.systemui",
-  "com.android.permissioncontroller",
-  "com.google.android.permissioncontroller",
-  "com.google.android.overlay.modules.permissioncontroller",
-];
-
-const BLOCKED_NAME_FRAGMENTS = [
-  "launcher",
-  "pixel launcher",
-  "system ui",
-  "permission controller",
-];
+import {
+  isIgnoredUsageEntry,
+  normalizeUsageSession,
+  normalizeUsageCategory,
+} from "../utils/usageSessionFilters.js";
 
 const NOTIFICATION_DEDUPE_MINUTES = 20;
 const DEBUG_ML_INGEST = process.env.DEBUG_ML_INGEST === "true";
@@ -49,51 +21,6 @@ const debugLog = (...args) => {
   if (DEBUG_ML_INGEST) {
     console.log(...args);
   }
-};
-
-const normalizeCategory = (value = "Other") => {
-  const raw = String(value || "").trim();
-  const lower = raw.toLowerCase();
-
-  if (lower.includes("social")) return "Social Media";
-  if (lower.includes("stream")) return "Streaming";
-  if (lower.includes("product")) return "Productivity";
-  if (lower.includes("game")) return "Gaming";
-  if (lower.includes("educat")) return "Education";
-  if (lower.includes("commun")) return "Communication";
-
-  return raw || "Other";
-};
-
-const isIgnoredUsageEntry = ({ appPackage = "", appName = "" }) => {
-  const normalizedPackage = String(appPackage || "").trim().toLowerCase();
-  const normalizedName = String(appName || "").trim().toLowerCase();
-
-  if (!normalizedPackage) {
-    return true;
-  }
-
-  if (BLOCKED_PACKAGE_EXACT.has(normalizedPackage)) {
-    return true;
-  }
-
-  if (
-    BLOCKED_PACKAGE_PREFIXES.some((prefix) =>
-      normalizedPackage.startsWith(prefix)
-    )
-  ) {
-    return true;
-  }
-
-  if (
-    BLOCKED_NAME_FRAGMENTS.some((fragment) =>
-      normalizedName.includes(fragment)
-    )
-  ) {
-    return true;
-  }
-
-  return false;
 };
 
 const toSafeNumber = (value, fallback = 0) => {
@@ -154,38 +81,128 @@ const createMlNotification = async ({
   return created;
 };
 
+const mapAppsPayloadToSessions = (apps = []) => {
+  const now = Date.now();
+
+  return apps.map((app, index) => {
+    const durationMinutes = Math.max(
+      0,
+      toSafeNumber(
+        app?.durationMinutes ??
+          app?.minutesUsed ??
+          (app?.foregroundMs !== undefined
+            ? Math.round(toSafeNumber(app.foregroundMs, 0) / 60000)
+            : 0),
+        0
+      )
+    );
+
+    const fallbackEnd = new Date(now - index * 1000);
+    const endTime = app?.lastTimeUsed
+      ? toSafeDate(app.lastTimeUsed, fallbackEnd)
+      : fallbackEnd;
+
+    const safeDurationForClock = Math.max(1, durationMinutes);
+    const startTime = new Date(
+      endTime.getTime() - safeDurationForClock * 60_000
+    );
+
+    return {
+      appName: String(app?.appName || "").trim(),
+      appPackage: String(app?.packageName || app?.appPackage || "").trim(),
+      category: String(app?.category || "Other").trim() || "Other",
+      durationMinutes,
+      pickups: Math.max(0, toSafeNumber(app?.pickups, 0)),
+      unlocks: Math.max(0, toSafeNumber(app?.unlocks, 0)),
+      startTime,
+      endTime,
+      platform: "android",
+      source: "native_bridge",
+      hourBucket: startTime.getHours(),
+    };
+  });
+};
+
+const sanitizeIncomingSession = ({ item = {}, userId }) => {
+  const appPackage = String(
+    item?.appPackage || item?.packageName || ""
+  ).trim();
+
+  if (!appPackage) {
+    return null;
+  }
+
+  const rawStart = toSafeDate(item?.startTime, new Date());
+
+  const durationMinutes = Math.max(
+    0,
+    toSafeNumber(
+      item?.durationMinutes ??
+        item?.minutesUsed ??
+        (item?.foregroundMs !== undefined
+          ? Math.round(toSafeNumber(item.foregroundMs, 0) / 60000)
+          : 0),
+      0
+    )
+  );
+
+  const rawEnd = item?.endTime
+    ? toSafeDate(item.endTime, rawStart)
+    : new Date(rawStart.getTime() + Math.max(1, durationMinutes) * 60_000);
+
+  const endTime =
+    rawEnd <= rawStart
+      ? new Date(rawStart.getTime() + Math.max(1, durationMinutes) * 60_000)
+      : rawEnd;
+
+  const baseSession = normalizeUsageSession({
+    user: userId,
+    dayKey: item?.dayKey || formatDayKey(rawStart),
+    appName: String(item?.appName || "").trim(),
+    appPackage,
+    category: String(item?.category || "Other").trim() || "Other",
+    durationMinutes,
+    pickups: Math.max(0, toSafeNumber(item?.pickups, 0)),
+    unlocks: Math.max(0, toSafeNumber(item?.unlocks, 0)),
+    startTime: rawStart,
+    endTime,
+    hourBucket:
+      item?.hourBucket !== undefined
+        ? Math.max(0, toSafeNumber(item.hourBucket, rawStart.getHours()))
+        : rawStart.getHours(),
+    source: String(item?.source || "native_bridge").trim() || "native_bridge",
+    platform: String(item?.platform || "android").trim() || "android",
+  });
+
+  if (
+    isIgnoredUsageEntry({
+      appPackage: baseSession.appPackage,
+      appName: baseSession.appName,
+    })
+  ) {
+    return null;
+  }
+
+  return {
+    ...baseSession,
+    durationMinutes,
+    pickups: Math.max(0, toSafeNumber(baseSession.pickups, 0)),
+    unlocks: Math.max(0, toSafeNumber(baseSession.unlocks, 0)),
+    category: normalizeUsageCategory(baseSession.category || "Other"),
+    startTime: rawStart,
+    endTime,
+  };
+};
+
 const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
   const merged = new Map();
 
   for (const item of payloadSessions) {
-    const appPackage = String(item.appPackage || "").trim();
-    const appName = String(item.appName || appPackage).trim();
+    const incoming = sanitizeIncomingSession({ item, userId });
 
-    if (isIgnoredUsageEntry({ appPackage, appName })) continue;
+    if (!incoming) continue;
 
-    const source = String(item.source || "native_bridge").trim();
-    const startTime = toSafeDate(item.startTime, new Date());
-    const dayKey = item.dayKey || formatDayKey(startTime);
-    const key = `${String(userId)}__${dayKey}__${appPackage}__${source}`;
-
-    const endTimeRaw = toSafeDate(item.endTime, startTime);
-    const endTime = endTimeRaw < startTime ? new Date(startTime) : endTimeRaw;
-
-    const incoming = {
-      user: userId,
-      dayKey,
-      appName,
-      appPackage,
-      category: normalizeCategory(item.category || "Other"),
-      durationMinutes: Math.max(0, toSafeNumber(item.durationMinutes, 0)),
-      pickups: Math.max(0, toSafeNumber(item.pickups, 0)),
-      unlocks: Math.max(0, toSafeNumber(item.unlocks, 0)),
-      startTime,
-      endTime,
-      hourBucket: toSafeNumber(item.hourBucket ?? startTime.getHours(), 0),
-      source,
-      platform: item.platform || "android",
-    };
+    const key = `${String(userId)}__${incoming.dayKey}__${incoming.appPackage}__${incoming.source}`;
 
     if (!merged.has(key)) {
       merged.set(key, incoming);
@@ -194,40 +211,47 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
 
     const existing = merged.get(key);
 
-    existing.durationMinutes += incoming.durationMinutes;
-    existing.pickups += incoming.pickups;
-    existing.unlocks += incoming.unlocks;
+    existing.durationMinutes += Math.max(0, toSafeNumber(incoming.durationMinutes, 0));
+    existing.pickups += Math.max(0, toSafeNumber(incoming.pickups, 0));
+    existing.unlocks += Math.max(0, toSafeNumber(incoming.unlocks, 0));
 
-    if (
-      incoming.startTime &&
-      (!existing.startTime || incoming.startTime < existing.startTime)
-    ) {
+    if (incoming.startTime < existing.startTime) {
       existing.startTime = incoming.startTime;
     }
 
-    if (
-      incoming.endTime &&
-      (!existing.endTime || incoming.endTime > existing.endTime)
-    ) {
+    if (incoming.endTime > existing.endTime) {
       existing.endTime = incoming.endTime;
     }
 
-    if (incoming.hourBucket < existing.hourBucket) {
-      existing.hourBucket = incoming.hourBucket;
+    if (toSafeNumber(incoming.hourBucket, 23) < toSafeNumber(existing.hourBucket, 23)) {
+      existing.hourBucket = toSafeNumber(incoming.hourBucket, 0);
     }
 
-    if (!existing.appName && incoming.appName) {
-      existing.appName = incoming.appName;
+    const existingName = String(existing.appName || "").trim();
+    const incomingName = String(incoming.appName || "").trim();
+
+    if (!existingName || existingName === existing.appPackage) {
+      existing.appName = incomingName || existingName;
     }
 
-    if (!existing.category && incoming.category) {
+    if (
+      (!existing.category || existing.category === "Other") &&
+      incoming.category
+    ) {
       existing.category = incoming.category;
     }
 
     merged.set(key, existing);
   }
 
-  return Array.from(merged.values());
+  return Array.from(merged.values()).sort((a, b) => {
+    const durationDiff =
+      toSafeNumber(b?.durationMinutes, 0) - toSafeNumber(a?.durationMinutes, 0);
+
+    if (durationDiff !== 0) return durationDiff;
+
+    return String(a?.appName || "").localeCompare(String(b?.appName || ""));
+  });
 };
 
 const upsertUsageSessions = async ({ sessions = [], userId }) => {
@@ -248,12 +272,12 @@ const upsertUsageSessions = async ({ sessions = [], userId }) => {
           appName: session.appName,
           appPackage: session.appPackage,
           category: session.category,
-          durationMinutes: session.durationMinutes,
-          pickups: session.pickups,
-          unlocks: session.unlocks,
+          durationMinutes: Math.max(0, toSafeNumber(session.durationMinutes, 0)),
+          pickups: Math.max(0, toSafeNumber(session.pickups, 0)),
+          unlocks: Math.max(0, toSafeNumber(session.unlocks, 0)),
           startTime: session.startTime,
           endTime: session.endTime,
-          hourBucket: session.hourBucket,
+          hourBucket: toSafeNumber(session.hourBucket, 0),
           source: session.source,
           platform: session.platform || "android",
         },
@@ -478,15 +502,19 @@ const buildPrivacyBlockedResponse = ({ payloadCount, privacy }) => ({
 });
 
 export const ingestUsageWithMl = asyncHandler(async (req, res) => {
-  const payloadSessions = Array.isArray(req.body.sessions)
+  const sessionsPayload = Array.isArray(req.body?.sessions)
     ? req.body.sessions
     : [];
+  const appsPayload = Array.isArray(req.body?.apps) ? req.body.apps : [];
 
-  if (!payloadSessions.length) {
-    return res
-      .status(400)
-      .json({ success: false, message: "No usage sessions provided." });
+  if (!sessionsPayload.length && !appsPayload.length) {
+    return res.status(400).json({
+      success: false,
+      message: "No usage sessions or apps were provided.",
+    });
   }
+
+  const payloadCount = sessionsPayload.length || appsPayload.length;
 
   const privacy = await getPrivacySyncState(req.user._id);
 
@@ -495,14 +523,18 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
 
     return res.json(
       buildPrivacyBlockedResponse({
-        payloadCount: payloadSessions.length,
+        payloadCount,
         privacy,
       })
     );
   }
 
+  const rawPayloadSessions = sessionsPayload.length
+    ? sessionsPayload
+    : mapAppsPayloadToSessions(appsPayload);
+
   const normalizedSessions = normalizeAndMergeSessions({
-    payloadSessions,
+    payloadSessions: rawPayloadSessions,
     userId: req.user._id,
   });
 
@@ -511,7 +543,7 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
       success: true,
       message: "No syncable usage sessions found after filtering system apps.",
       syncMeta: {
-        sessionsReceived: payloadSessions.length,
+        sessionsReceived: payloadCount,
         sessionsNormalized: 0,
         dayKey: null,
         skippedDueToPrivacy: false,
@@ -547,12 +579,29 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
   });
 
   const analysisDate = getAnalysisDate(normalizedSessions);
+  const dayKeyForAnalysis = formatDayKey(analysisDate);
+
+  const persistedSessionsRaw = await UsageSession.find({
+    user: req.user._id,
+    dayKey: dayKeyForAnalysis,
+  })
+    .sort({ durationMinutes: -1, appName: 1 })
+    .lean();
+
+  const persistedDaySessions = normalizeAndMergeSessions({
+    payloadSessions: persistedSessionsRaw,
+    userId: req.user._id,
+  });
+
+  const analysisSessions = persistedDaySessions.length
+    ? persistedDaySessions
+    : normalizedSessions;
 
   const { dayKey, settings, dailyAnalysis, featureRow } =
     await buildMlFeaturesForDay({
       user: req.user,
       date: analysisDate,
-      sessions: normalizedSessions,
+      sessions: analysisSessions,
     });
 
   debugLog("ML ANALYSIS DAY KEY:", dayKey);
@@ -573,6 +622,10 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
         dayKey,
         score: resolvedScore,
         riskLevel: mlInsight.riskLevel,
+        totalScreenMinutes: toSafeNumber(dailyAnalysis?.totalScreenMinutes, 0),
+        pickups: toSafeNumber(dailyAnalysis?.pickups, 0),
+        unlocks: toSafeNumber(dailyAnalysis?.unlocks, 0),
+        lateNightMinutes: toSafeNumber(dailyAnalysis?.lateNightMinutes, 0),
         recommendations: Array.isArray(dailyAnalysis?.recommendations)
           ? dailyAnalysis.recommendations
           : [],
@@ -601,7 +654,7 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
   const notificationFeatures = await buildNotificationMlFeaturesForDay({
     user: req.user,
     date: analysisDate,
-    sessions: normalizedSessions,
+    sessions: analysisSessions,
   });
 
   const effectiveSettings = notificationFeatures?.settings || settings;
@@ -634,7 +687,7 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
     success: true,
     message: "Usage ingested and ML prediction completed.",
     syncMeta: {
-      sessionsReceived: payloadSessions.length,
+      sessionsReceived: payloadCount,
       sessionsNormalized: normalizedSessions.length,
       dayKey,
       skippedDueToPrivacy: false,
@@ -649,8 +702,11 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
       totalScreenMinutes: toSafeNumber(dailyAnalysis?.totalScreenMinutes, 0),
       overLimitMinutes: Math.max(
         0,
-        toSafeNumber(dailyAnalysis?.totalScreenMinutes, 0) -
-          toSafeNumber(settings?.dailyLimitMinutes, 180)
+        toSafeNumber(
+          featureRow?.overLimitMinutes,
+          toSafeNumber(dailyAnalysis?.totalScreenMinutes, 0) -
+            toSafeNumber(settings?.dailyLimitMinutes, 180)
+        )
       ),
     },
     notificationMeta: {
