@@ -120,7 +120,6 @@ const sanitizeIncomingSession = ({ item = {}, userId }) => {
   }
 
   const rawStart = toSafeDate(item?.startTime, new Date());
-
   const durationMinutes = Math.max(0, getSessionDurationMinutes(item));
 
   const rawEnd = item?.endTime
@@ -188,7 +187,10 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
 
     const existing = merged.get(key);
 
-    existing.durationMinutes += Math.max(0, toSafeNumber(incoming.durationMinutes, 0));
+    existing.durationMinutes += Math.max(
+      0,
+      toSafeNumber(incoming.durationMinutes, 0)
+    );
     existing.pickups += Math.max(0, toSafeNumber(incoming.pickups, 0));
     existing.unlocks += Math.max(0, toSafeNumber(incoming.unlocks, 0));
 
@@ -214,7 +216,10 @@ const normalizeAndMergeSessions = ({ payloadSessions = [], userId }) => {
       existing.appName = incomingName || existingName;
     }
 
-    if ((!existing.category || existing.category === "Other") && incoming.category) {
+    if (
+      (!existing.category || existing.category === "Other") &&
+      incoming.category
+    ) {
       existing.category = incoming.category;
     }
 
@@ -249,7 +254,10 @@ const upsertUsageSessions = async ({ sessions = [], userId }) => {
           appName: session.appName,
           appPackage: session.appPackage,
           category: session.category,
-          durationMinutes: Math.max(0, toSafeNumber(session.durationMinutes, 0)),
+          durationMinutes: Math.max(
+            0,
+            toSafeNumber(session.durationMinutes, 0)
+          ),
           pickups: Math.max(0, toSafeNumber(session.pickups, 0)),
           unlocks: Math.max(0, toSafeNumber(session.unlocks, 0)),
           startTime: session.startTime,
@@ -479,12 +487,16 @@ const buildPrivacyBlockedResponse = ({ payloadCount, privacy }) => ({
 });
 
 export const ingestUsageWithMl = asyncHandler(async (req, res) => {
+  console.log("[ML INGEST] request received");
+
   const sessionsPayload = Array.isArray(req.body?.sessions)
     ? req.body.sessions
     : [];
   const appsPayload = Array.isArray(req.body?.apps) ? req.body.apps : [];
 
   if (!sessionsPayload.length && !appsPayload.length) {
+    console.log("[ML INGEST] rejected: empty payload");
+
     return res.status(400).json({
       success: false,
       message: "No usage sessions or apps were provided.",
@@ -495,6 +507,7 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
   const privacy = await getPrivacySyncState(req.user._id);
 
   if (!privacy.allowServerSync) {
+    console.log("[ML INGEST] blocked by privacy settings", privacy);
     debugLog("ML INGEST BLOCKED BY PRIVACY SETTINGS:", privacy);
 
     return res.json(
@@ -515,6 +528,8 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
   });
 
   if (!normalizedSessions.length) {
+    console.log("[ML INGEST] no syncable sessions after filtering");
+
     return res.json({
       success: true,
       message: "No syncable usage sessions found after filtering system apps.",
@@ -619,7 +634,7 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
     },
     {
       upsert: true,
-      new: true,
+      returnDocument: "after",
       setDefaultsOnInsert: true,
     }
   );
@@ -654,6 +669,17 @@ export const ingestUsageWithMl = asyncHandler(async (req, res) => {
     notificationPrediction,
     settings: effectiveSettings,
     featureRow: notificationFeatureRow,
+  });
+
+  console.log("[ML INGEST] success", {
+    dayKey,
+    score: resolvedScore,
+    riskLevel: mlInsight.riskLevel,
+    predictionSource: mlInsight.source,
+    fallbackUsed: Boolean(mlInsight.fallbackUsed),
+    sessionsReceived: payloadCount,
+    sessionsNormalized: normalizedSessions.length,
+    createdNotifications: createdNotifications.length,
   });
 
   res.json({
