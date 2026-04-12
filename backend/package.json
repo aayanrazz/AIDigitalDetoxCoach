@@ -10,7 +10,20 @@
     "seed": "node src/seeds/seed.js",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --runInBand",
     "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch",
-    "test:integration:auth": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --runInBand src/__tests__/integration/auth.integration.test.js"
+    "test:integration:auth": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --runInBand src/__tests__/integration/auth.integration.test.js",
+    "test:controllers": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers --runInBand",
+    "test:controller:auth": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module01_auth_controller.test.ts --runInBand",
+    "test:controller:profile": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module02_profile_setup_controller.test.ts --runInBand",
+    "test:controller:settings": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module03_settings_preferences_controller.test.ts --runInBand",
+    "test:controller:privacy": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module04_privacy_data_control_controller.test.ts --runInBand",
+    "test:controller:usage-collection": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module05_usage_collection_controller.test.ts --runInBand",
+    "test:controller:usage-today": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module06_usage_today_controller.test.ts --runInBand",
+    "test:controller:usage-ml": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module07_usage_ml_controller.test.ts --runInBand",
+    "test:controller:app-limits": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module08_app_limits_controller.test.ts --runInBand",
+    "test:controller:dashboard": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module09_dashboard_controller.test.ts --runInBand",
+    "test:controller:analytics": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module10_analytics_controller.test.ts --runInBand",
+    "test:controller:detox-plan": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module11_detox_plan_controller.test.ts --runInBand",
+    "test:controller:notifications-rewards": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module12_notifications_rewards_controller.test.ts --runInBand"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -28,10 +41,13 @@
   "devDependencies": {
     "@babel/core": "^7.26.0",
     "@babel/preset-env": "^7.26.0",
+    "@types/jest": "^30.0.0",
     "babel-jest": "^29.7.0",
     "cross-env": "^7.0.3",
     "jest": "^29.7.0",
     "nodemon": "^3.1.14",
-    "supertest": "^7.2.2"
+    "supertest": "^7.2.2",
+    "ts-jest": "^29.4.9",
+    "typescript": "^6.0.2"
   }
 }

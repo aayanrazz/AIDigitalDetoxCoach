@@ -1,14 +1,16 @@
-import { describe, test, expect, jest, beforeEach } from '@jest/globals';
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+
+type AnyFn = any;
 
 const makeRes = () => {
-  const res = {};
+  const res: any = {};
   res.status = jest.fn(() => res);
   res.json = jest.fn(() => res);
   return res;
 };
 
-const makeAppLimitFindResult = (value = []) => ({
-  sort: jest.fn().mockResolvedValue(value),
+const makeAppLimitFindResult = (value: any[] = []) => ({
+  sort: jest.fn().mockImplementation(async () => value),
 });
 
 const loadSettingsController = async ({
@@ -17,6 +19,12 @@ const loadSettingsController = async ({
   appLimitFind,
   notificationCreate,
   serializeUserImpl,
+}: {
+  userSettingsFindOne?: AnyFn;
+  userSettingsCreate?: AnyFn;
+  appLimitFind?: AnyFn;
+  notificationCreate?: AnyFn;
+  serializeUserImpl?: AnyFn;
 } = {}) => {
   const UserSettings = {
     findOne: userSettingsFindOne ?? jest.fn(),
@@ -37,7 +45,7 @@ const loadSettingsController = async ({
 
   const serializeUser =
     serializeUserImpl ??
-    jest.fn(user => ({
+    jest.fn((user: any) => ({
       _id: user._id,
       name: user.name,
       age: user.age,
@@ -46,35 +54,35 @@ const loadSettingsController = async ({
       isOnboarded: user.isOnboarded,
     }));
 
-  jest.unstable_mockModule('../../models/UserSettings.js', () => ({
+  jest.unstable_mockModule('../../src/models/UserSettings.js', () => ({
     default: UserSettings,
   }));
 
-  jest.unstable_mockModule('../../models/AppLimit.js', () => ({
+  jest.unstable_mockModule('../../src/models/AppLimit.js', () => ({
     default: AppLimit,
   }));
 
-  jest.unstable_mockModule('../../models/Notification.js', () => ({
+  jest.unstable_mockModule('../../src/models/Notification.js', () => ({
     default: Notification,
   }));
 
-  jest.unstable_mockModule('../../models/UsageSession.js', () => ({
+  jest.unstable_mockModule('../../src/models/UsageSession.js', () => ({
     default: UsageSession,
   }));
 
-  jest.unstable_mockModule('../../models/AiInsight.js', () => ({
+  jest.unstable_mockModule('../../src/models/AiInsight.js', () => ({
     default: AiInsight,
   }));
 
-  jest.unstable_mockModule('../../models/DetoxPlan.js', () => ({
+  jest.unstable_mockModule('../../src/models/DetoxPlan.js', () => ({
     default: DetoxPlan,
   }));
 
-  jest.unstable_mockModule('../../utils/serialize.js', () => ({
+  jest.unstable_mockModule('../../src/utils/serialize.js', () => ({
     serializeUser,
   }));
 
-  const controller = await import('../settings.controller.js');
+  const controller = await import('../../src/controllers/settings.controller.js');
 
   return {
     ...controller,
@@ -87,13 +95,13 @@ const loadSettingsController = async ({
   };
 };
 
-describe('settings.controller profile setup module', () => {
+describe('Module 2 - settings.controller.js profile setup', () => {
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
   });
 
-  test('TC_PROFILE_008 getSettings creates default settings when none exist', async () => {
+  it('TC_PROFILE_CTRL_001 - getSettings creates default settings when none exist', async () => {
     const createdSettings = {
       user: 'user-1',
       dailyLimitMinutes: 240,
@@ -106,12 +114,12 @@ describe('settings.controller profile setup module', () => {
         limitWarnings: true,
       },
       privacySettings: {},
-      save: jest.fn().mockResolvedValue(undefined),
+      save: jest.fn().mockImplementation(async () => undefined),
     };
 
     const { getSettings, mocks } = await loadSettingsController({
-      userSettingsFindOne: jest.fn().mockResolvedValue(null),
-      userSettingsCreate: jest.fn().mockResolvedValue(createdSettings),
+      userSettingsFindOne: jest.fn().mockImplementation(async () => null),
+      userSettingsCreate: jest.fn().mockImplementation(async () => createdSettings),
       appLimitFind: jest.fn(() => makeAppLimitFindResult([])),
     });
 
@@ -121,9 +129,9 @@ describe('settings.controller profile setup module', () => {
         name: 'Aayan',
         goal: '',
       },
-    };
+    } as any;
     const res = makeRes();
-    const next = jest.fn();
+    const next: any = jest.fn();
 
     await getSettings(req, res, next);
 
@@ -156,7 +164,7 @@ describe('settings.controller profile setup module', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  test('TC_PROFILE_009 completeProfileSetup rejects missing display name', async () => {
+  it('TC_PROFILE_CTRL_002 - completeProfileSetup rejects missing display name', async () => {
     const settings = {
       notificationSettings: {},
       privacySettings: {},
@@ -164,7 +172,7 @@ describe('settings.controller profile setup module', () => {
     };
 
     const { completeProfileSetup, mocks } = await loadSettingsController({
-      userSettingsFindOne: jest.fn().mockResolvedValue(settings),
+      userSettingsFindOne: jest.fn().mockImplementation(async () => settings),
     });
 
     const req = {
@@ -177,9 +185,9 @@ describe('settings.controller profile setup module', () => {
         goal: 'Reduce distraction',
         focusAreas: ['Social Media'],
       },
-    };
+    } as any;
     const res = makeRes();
-    const next = jest.fn();
+    const next: any = jest.fn();
 
     await completeProfileSetup(req, res, next);
 
@@ -192,7 +200,7 @@ describe('settings.controller profile setup module', () => {
     );
   });
 
-  test('TC_PROFILE_010 completeProfileSetup rejects missing detox goal', async () => {
+  it('TC_PROFILE_CTRL_003 - completeProfileSetup rejects missing detox goal', async () => {
     const settings = {
       notificationSettings: {},
       privacySettings: {},
@@ -200,7 +208,7 @@ describe('settings.controller profile setup module', () => {
     };
 
     const { completeProfileSetup } = await loadSettingsController({
-      userSettingsFindOne: jest.fn().mockResolvedValue(settings),
+      userSettingsFindOne: jest.fn().mockImplementation(async () => settings),
     });
 
     const req = {
@@ -213,9 +221,9 @@ describe('settings.controller profile setup module', () => {
         goal: '   ',
         focusAreas: ['Social Media'],
       },
-    };
+    } as any;
     const res = makeRes();
-    const next = jest.fn();
+    const next: any = jest.fn();
 
     await completeProfileSetup(req, res, next);
 
@@ -227,7 +235,7 @@ describe('settings.controller profile setup module', () => {
     );
   });
 
-  test('TC_PROFILE_011 completeProfileSetup rejects empty focus areas', async () => {
+  it('TC_PROFILE_CTRL_004 - completeProfileSetup rejects empty focus areas', async () => {
     const settings = {
       notificationSettings: {},
       privacySettings: {},
@@ -235,7 +243,7 @@ describe('settings.controller profile setup module', () => {
     };
 
     const { completeProfileSetup } = await loadSettingsController({
-      userSettingsFindOne: jest.fn().mockResolvedValue(settings),
+      userSettingsFindOne: jest.fn().mockImplementation(async () => settings),
     });
 
     const req = {
@@ -248,9 +256,9 @@ describe('settings.controller profile setup module', () => {
         goal: 'Reduce distraction',
         focusAreas: ['   ', ''],
       },
-    };
+    } as any;
     const res = makeRes();
-    const next = jest.fn();
+    const next: any = jest.fn();
 
     await completeProfileSetup(req, res, next);
 
@@ -262,7 +270,7 @@ describe('settings.controller profile setup module', () => {
     );
   });
 
-  test('TC_PROFILE_012 completeProfileSetup normalizes values, updates isOnboarded, saves settings, and creates notification', async () => {
+  it('TC_PROFILE_CTRL_005 - completeProfileSetup normalizes values, updates onboarding, saves settings, and creates notification', async () => {
     const settings = {
       dailyLimitMinutes: 240,
       focusAreas: ['Social Media'],
@@ -277,14 +285,14 @@ describe('settings.controller profile setup module', () => {
         limitWarnings: true,
       },
       privacySettings: {},
-      save: jest.fn().mockResolvedValue(undefined),
+      save: jest.fn().mockImplementation(async () => undefined),
     };
 
-    const userSave = jest.fn().mockResolvedValue(undefined);
+    const userSave = jest.fn().mockImplementation(async () => undefined);
 
     const { completeProfileSetup, mocks } = await loadSettingsController({
-      userSettingsFindOne: jest.fn().mockResolvedValue(settings),
-      notificationCreate: jest.fn().mockResolvedValue({}),
+      userSettingsFindOne: jest.fn().mockImplementation(async () => settings),
+      notificationCreate: jest.fn().mockImplementation(async () => ({})),
     });
 
     const req = {
@@ -310,10 +318,10 @@ describe('settings.controller profile setup module', () => {
           dailySummaries: false,
         },
       },
-    };
+    } as any;
 
     const res = makeRes();
-    const next = jest.fn();
+    const next: any = jest.fn();
 
     await completeProfileSetup(req, res, next);
 
