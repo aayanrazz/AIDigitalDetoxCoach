@@ -8,9 +8,11 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "seed": "node src/seeds/seed.js",
-    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --runInBand",
-    "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch",
-    "test:integration:auth": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --runInBand src/__tests__/integration/auth.integration.test.js",
+
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --runInBand",
+    "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --watch",
+    "test:integration:auth": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --runInBand src/__tests__/integration/auth.integration.test.js",
+
     "test:controllers": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers --runInBand",
     "test:controller:auth": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module01_auth_controller.test.ts --runInBand",
     "test:controller:profile": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module02_profile_setup_controller.test.ts --runInBand",
@@ -23,7 +25,19 @@
     "test:controller:dashboard": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module09_dashboard_controller.test.ts --runInBand",
     "test:controller:analytics": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module10_analytics_controller.test.ts --runInBand",
     "test:controller:detox-plan": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module11_detox_plan_controller.test.ts --runInBand",
-    "test:controller:notifications-rewards": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module12_notifications_rewards_controller.test.ts --runInBand"
+    "test:controller:notifications-rewards": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs tests/controllers/module12_notifications_rewards_controller.test.ts --runInBand",
+
+    "test:ai": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs src/controllers/__tests__/usage.ml.controller.test.js src/controllers/__tests__/planPreview.ml.controller.test.js src/controllers/__tests__/notificationPreview.ml.controller.test.js tests/ai --runInBand",
+    "test:ai:acceptance": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs tests/ai/acceptance --runInBand",
+    "test:ai:smoke": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs tests/ai/smoke --runInBand",
+    "test:ai:controllers": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs src/controllers/__tests__/usage.ml.controller.test.js src/controllers/__tests__/planPreview.ml.controller.test.js src/controllers/__tests__/notificationPreview.ml.controller.test.js --runInBand",
+    "test:ai:artifacts": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs tests/ai/acceptance/model.artifacts.acceptance.test.js --runInBand",
+    "test:ai:metrics": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs tests/ai/acceptance/model.metrics.acceptance.test.js --runInBand",
+    "test:ai:risk-smoke": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs tests/ai/smoke/predict_risk_bridge.smoke.test.js --runInBand",
+    "test:ai:plan-smoke": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs tests/ai/smoke/predict_plan_bridge.smoke.test.js --runInBand",
+    "test:ai:notification-smoke": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs tests/ai/smoke/predict_notification_bridge.smoke.test.js --runInBand",
+
+    "test:all": "npm run test:controllers && npm run test:ai"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

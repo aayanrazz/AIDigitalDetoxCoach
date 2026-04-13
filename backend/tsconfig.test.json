@@ -5,12 +5,20 @@
     "moduleResolution": "Node",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
     "strict": false,
     "skipLibCheck": true,
     "types": ["jest", "node"]
   },
   "include": [
     "tests/**/*.ts",
-    "src/**/*.js"
+    "src/**/*.js",
+    "src/**/*.json"
+  ],
+  "exclude": [
+    "node_modules"
   ]
 }
