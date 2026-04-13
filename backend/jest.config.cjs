@@ -14,17 +14,14 @@ module.exports = {
     ],
   },
 
-  testMatch: [
-    '<rootDir>/tests/controllers/**/*.test.ts',
-    '<rootDir>/tests/ai/**/*.test.js',
-    '<rootDir>/src/**/__tests__/**/*.test.js',
-  ],
+  testMatch: ['<rootDir>/tests/controllers/**/*.test.ts'],
 
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
 
   moduleFileExtensions: ['ts', 'js', 'json'],
 
   clearMocks: true,
+  restoreMocks: true,
   verbose: true,
   testTimeout: 120000,
 };

@@ -435,9 +435,9 @@ export const saveAppLimit = asyncHandler(async (req, res) => {
       dailyLimitMinutes: normalizedLimit,
     },
     {
-      new: true,
-      upsert: true,
-      setDefaultsOnInsert: true,
+    returnDocument: "after",
+    upsert: true,
+    setDefaultsOnInsert: true,
     }
   );
 

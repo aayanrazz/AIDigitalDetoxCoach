@@ -12,7 +12,15 @@ import { errorHandler } from "./middleware/errorHandler.js";
 
 const app = express();
 
-app.enable("trust proxy");
+const isProduction = env.NODE_ENV === "production";
+const isTest = env.NODE_ENV === "test";
+
+
+if (isProduction) {
+  app.set("trust proxy", 1);
+} else {
+  app.set("trust proxy", false);
+}
 
 app.use(helmet());
 app.use(compression());
@@ -24,7 +32,7 @@ app.use(
   })
 );
 
-if (env.NODE_ENV === "production") {
+if (isProduction) {
   app.use((req, res, next) => {
     const forwardedProto = req.headers["x-forwarded-proto"];
     const isSecure = req.secure || forwardedProto === "https";
@@ -51,7 +59,11 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-app.use("/api", apiLimiter);
+
+if (!isTest) {
+  app.use("/api", apiLimiter);
+}
+
 app.use("/api", router);
 
 app.use(notFound);

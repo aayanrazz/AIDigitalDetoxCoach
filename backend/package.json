@@ -37,7 +37,14 @@
     "test:ai:plan-smoke": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs tests/ai/smoke/predict_plan_bridge.smoke.test.js --runInBand",
     "test:ai:notification-smoke": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.ai.config.cjs tests/ai/smoke/predict_notification_bridge.smoke.test.js --runInBand",
 
-    "test:all": "npm run test:controllers && npm run test:ai"
+    "test:system": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.system.config.cjs --runInBand",
+    "test:system:onboarding": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.system.config.cjs tests/system/01_onboarding_privacy.system.test.ts --runInBand",
+    "test:system:usage": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.system.config.cjs tests/system/02_usage_ai_dashboard_analytics.system.test.ts --runInBand",
+    "test:system:plan": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.system.config.cjs tests/system/03_plan_notifications_rewards.system.test.ts --runInBand",
+    "test:system:delete-data": "cross-env NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --config jest.system.config.cjs tests/system/04_delete_my_data.system.test.ts --runInBand",
+
+    "test:all": "npm run test:controllers && npm run test:ai",
+    "test:full": "npm run test:controllers && npm run test:ai && npm run test:system"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

@@ -1,4 +1,33 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import path from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const userModelUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/models/User.js')
+).href;
+
+const userSettingsModelUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/models/UserSettings.js')
+).href;
+
+const notificationModelUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/models/Notification.js')
+).href;
+
+const jwtUtilUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/utils/jwt.js')
+).href;
+
+const serializeUtilUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/utils/serialize.js')
+).href;
+
+const authControllerUrl = pathToFileURL(
+  path.resolve(__dirname, '../../src/controllers/auth.controller.js')
+).href;
 
 const mockUserFindOne: any = jest.fn();
 const mockUserCreate: any = jest.fn();
@@ -7,50 +36,52 @@ const mockSettingsFindOne: any = jest.fn();
 const mockNotificationCreate: any = jest.fn();
 const mockHash: any = jest.fn();
 const mockCompare: any = jest.fn();
+const mockGenerateToken: any = jest.fn(() => 'jwt-token');
+const mockSerializeUser: any = jest.fn((user: any) => ({
+  _id: user._id,
+  id: user._id,
+  name: user.name,
+  email: user.email,
+}));
 
-jest.unstable_mockModule('../../src/models/User.js', () => ({
+await jest.unstable_mockModule(userModelUrl, () => ({
   default: {
     findOne: mockUserFindOne,
-    create: mockUserCreate
-  }
+    create: mockUserCreate,
+  },
 }));
 
-jest.unstable_mockModule('../../src/models/UserSettings.js', () => ({
+await jest.unstable_mockModule(userSettingsModelUrl, () => ({
   default: {
     create: mockSettingsCreate,
-    findOne: mockSettingsFindOne
-  }
+    findOne: mockSettingsFindOne,
+  },
 }));
 
-jest.unstable_mockModule('../../src/models/Notification.js', () => ({
+await jest.unstable_mockModule(notificationModelUrl, () => ({
   default: {
-    create: mockNotificationCreate
-  }
+    create: mockNotificationCreate,
+  },
 }));
 
-jest.unstable_mockModule('bcryptjs', () => ({
+await jest.unstable_mockModule('bcryptjs', () => ({
   default: {
     hash: mockHash,
-    compare: mockCompare
+    compare: mockCompare,
   },
   hash: mockHash,
-  compare: mockCompare
+  compare: mockCompare,
 }));
 
-jest.unstable_mockModule('../../src/utils/jwt.js', () => ({
-  generateToken: jest.fn(() => 'jwt-token')
+await jest.unstable_mockModule(jwtUtilUrl, () => ({
+  generateToken: mockGenerateToken,
 }));
 
-jest.unstable_mockModule('../../src/utils/serialize.js', () => ({
-  serializeUser: jest.fn((user: any) => ({
-    _id: user._id,
-    id: user._id,
-    name: user.name,
-    email: user.email
-  }))
+await jest.unstable_mockModule(serializeUtilUrl, () => ({
+  serializeUser: mockSerializeUser,
 }));
 
-const { register, login, getMe } = await import('../../src/controllers/auth.controller.js');
+const { register, login, getMe } = await import(authControllerUrl);
 
 type MockResponse = {
   statusCode: number;
@@ -75,7 +106,7 @@ function createMockResponse(): MockResponse {
     json(payload: any) {
       this.body = payload;
       return this;
-    }
+    },
   };
 }
 
@@ -86,6 +117,13 @@ function getNextError(next: any): ApiErrorLike {
 describe('Module 1 - auth.controller.js', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGenerateToken.mockReturnValue('jwt-token');
+    mockSerializeUser.mockImplementation((user: any) => ({
+      _id: user._id,
+      id: user._id,
+      name: user.name,
+      email: user.email,
+    }));
   });
 
   it('TC_AUTH_CTRL_001 - register rejects when required fields are missing', async () => {
@@ -106,8 +144,8 @@ describe('Module 1 - auth.controller.js', () => {
       body: {
         name: 'Aayan',
         email: 'aayan@example.com',
-        password: '12345'
-      }
+        password: '12345',
+      },
     } as any;
 
     const res = createMockResponse();
@@ -124,15 +162,15 @@ describe('Module 1 - auth.controller.js', () => {
   it('TC_AUTH_CTRL_003 - register rejects duplicate email', async () => {
     mockUserFindOne.mockImplementationOnce(async () => ({
       _id: 'existing-user-id',
-      email: 'aayan@example.com'
+      email: 'aayan@example.com',
     }));
 
     const req = {
       body: {
         name: 'Aayan',
         email: 'aayan@example.com',
-        password: 'password123'
-      }
+        password: 'password123',
+      },
     } as any;
 
     const res = createMockResponse();
@@ -141,7 +179,7 @@ describe('Module 1 - auth.controller.js', () => {
     await register(req, res as any, next);
 
     expect(mockUserFindOne).toHaveBeenCalledWith({
-      email: 'aayan@example.com'
+      email: 'aayan@example.com',
     });
 
     expect(next).toHaveBeenCalledTimes(1);
@@ -157,24 +195,24 @@ describe('Module 1 - auth.controller.js', () => {
     mockUserCreate.mockImplementationOnce(async () => ({
       _id: 'user-001',
       name: 'Aayan',
-      email: 'aayan@example.com'
+      email: 'aayan@example.com',
     }));
 
     mockSettingsCreate.mockImplementationOnce(async () => ({
       _id: 'settings-001',
-      user: 'user-001'
+      user: 'user-001',
     }));
 
     mockNotificationCreate.mockImplementationOnce(async () => ({
-      _id: 'notification-001'
+      _id: 'notification-001',
     }));
 
     const req = {
       body: {
         name: '  Aayan  ',
         email: '  AAYAN@example.com  ',
-        password: 'password123'
-      }
+        password: 'password123',
+      },
     } as any;
 
     const res = createMockResponse();
@@ -183,7 +221,7 @@ describe('Module 1 - auth.controller.js', () => {
     await register(req, res as any, next);
 
     expect(mockUserFindOne).toHaveBeenCalledWith({
-      email: 'aayan@example.com'
+      email: 'aayan@example.com',
     });
 
     expect(mockHash).toHaveBeenCalledWith('password123', 10);
@@ -191,11 +229,11 @@ describe('Module 1 - auth.controller.js', () => {
     expect(mockUserCreate).toHaveBeenCalledWith({
       name: 'Aayan',
       email: 'aayan@example.com',
-      passwordHash: 'hashed-password'
+      passwordHash: 'hashed-password',
     });
 
     expect(mockSettingsCreate).toHaveBeenCalledWith({
-      user: 'user-001'
+      user: 'user-001',
     });
 
     expect(mockNotificationCreate).toHaveBeenCalledWith({
@@ -205,10 +243,11 @@ describe('Module 1 - auth.controller.js', () => {
       body: 'Complete your profile setup to generate your first detox plan.',
       cta: {
         label: 'SET GOALS',
-        action: 'open_profile_setup'
-      }
+        action: 'open_profile_setup',
+      },
     });
 
+    expect(mockGenerateToken).toHaveBeenCalledWith('user-001');
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(201);
     expect(res.body).toEqual({
@@ -219,12 +258,12 @@ describe('Module 1 - auth.controller.js', () => {
         _id: 'user-001',
         id: 'user-001',
         name: 'Aayan',
-        email: 'aayan@example.com'
+        email: 'aayan@example.com',
       },
       settings: {
         _id: 'settings-001',
-        user: 'user-001'
-      }
+        user: 'user-001',
+      },
     });
   });
 
@@ -246,14 +285,14 @@ describe('Module 1 - auth.controller.js', () => {
     mockSelect.mockImplementationOnce(async () => null);
 
     mockUserFindOne.mockImplementationOnce(() => ({
-      select: mockSelect
+      select: mockSelect,
     }));
 
     const req = {
       body: {
         email: 'unknown@example.com',
-        password: 'password123'
-      }
+        password: 'password123',
+      },
     } as any;
 
     const res = createMockResponse();
@@ -262,7 +301,7 @@ describe('Module 1 - auth.controller.js', () => {
     await login(req, res as any, next);
 
     expect(mockUserFindOne).toHaveBeenCalledWith({
-      email: 'unknown@example.com'
+      email: 'unknown@example.com',
     });
     expect(mockSelect).toHaveBeenCalledWith('+passwordHash');
 
@@ -280,14 +319,14 @@ describe('Module 1 - auth.controller.js', () => {
       name: 'Aayan',
       email: 'aayan@example.com',
       passwordHash: 'hashed-password',
-      save: mockSave
+      save: mockSave,
     };
 
     const mockSelect: any = jest.fn();
     mockSelect.mockImplementationOnce(async () => mockUser);
 
     mockUserFindOne.mockImplementationOnce(() => ({
-      select: mockSelect
+      select: mockSelect,
     }));
 
     mockCompare.mockImplementationOnce(async () => false);
@@ -295,8 +334,8 @@ describe('Module 1 - auth.controller.js', () => {
     const req = {
       body: {
         email: 'aayan@example.com',
-        password: 'wrong-password'
-      }
+        password: 'wrong-password',
+      },
     } as any;
 
     const res = createMockResponse();
@@ -304,7 +343,10 @@ describe('Module 1 - auth.controller.js', () => {
 
     await login(req, res as any, next);
 
-    expect(mockCompare).toHaveBeenCalledWith('wrong-password', 'hashed-password');
+    expect(mockCompare).toHaveBeenCalledWith(
+      'wrong-password',
+      'hashed-password'
+    );
     expect(mockSave).not.toHaveBeenCalled();
 
     expect(next).toHaveBeenCalledTimes(1);
@@ -323,14 +365,14 @@ describe('Module 1 - auth.controller.js', () => {
       email: 'aayan@example.com',
       passwordHash: 'hashed-password',
       save: mockSave,
-      lastLoginAt: null as Date | null
+      lastLoginAt: null as Date | null,
     };
 
     const mockSelect: any = jest.fn();
     mockSelect.mockImplementationOnce(async () => mockUser);
 
     mockUserFindOne.mockImplementationOnce(() => ({
-      select: mockSelect
+      select: mockSelect,
     }));
 
     mockCompare.mockImplementationOnce(async () => true);
@@ -338,14 +380,14 @@ describe('Module 1 - auth.controller.js', () => {
     mockSettingsFindOne.mockImplementationOnce(async () => ({
       _id: 'settings-001',
       user: 'user-001',
-      dailyLimitMinutes: 180
+      dailyLimitMinutes: 180,
     }));
 
     const req = {
       body: {
         email: '  AAYAN@example.com  ',
-        password: 'password123'
-      }
+        password: 'password123',
+      },
     } as any;
 
     const res = createMockResponse();
@@ -354,14 +396,18 @@ describe('Module 1 - auth.controller.js', () => {
     await login(req, res as any, next);
 
     expect(mockUserFindOne).toHaveBeenCalledWith({
-      email: 'aayan@example.com'
+      email: 'aayan@example.com',
     });
-    expect(mockCompare).toHaveBeenCalledWith('password123', 'hashed-password');
+    expect(mockCompare).toHaveBeenCalledWith(
+      'password123',
+      'hashed-password'
+    );
     expect(mockSettingsFindOne).toHaveBeenCalledWith({
-      user: 'user-001'
+      user: 'user-001',
     });
     expect(mockUser.lastLoginAt).toBeInstanceOf(Date);
     expect(mockSave).toHaveBeenCalled();
+    expect(mockGenerateToken).toHaveBeenCalledWith('user-001');
 
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
@@ -373,13 +419,13 @@ describe('Module 1 - auth.controller.js', () => {
         _id: 'user-001',
         id: 'user-001',
         name: 'Aayan',
-        email: 'aayan@example.com'
+        email: 'aayan@example.com',
       },
       settings: {
         _id: 'settings-001',
         user: 'user-001',
-        dailyLimitMinutes: 180
-      }
+        dailyLimitMinutes: 180,
+      },
     });
   });
 
@@ -387,15 +433,15 @@ describe('Module 1 - auth.controller.js', () => {
     mockSettingsFindOne.mockImplementationOnce(async () => ({
       _id: 'settings-001',
       user: 'user-001',
-      dailyLimitMinutes: 180
+      dailyLimitMinutes: 180,
     }));
 
     const req = {
       user: {
         _id: 'user-001',
         name: 'Aayan',
-        email: 'aayan@example.com'
-      }
+        email: 'aayan@example.com',
+      },
     } as any;
 
     const res = createMockResponse();
@@ -404,7 +450,7 @@ describe('Module 1 - auth.controller.js', () => {
     await getMe(req, res as any, next);
 
     expect(mockSettingsFindOne).toHaveBeenCalledWith({
-      user: 'user-001'
+      user: 'user-001',
     });
 
     expect(next).not.toHaveBeenCalled();
@@ -415,13 +461,13 @@ describe('Module 1 - auth.controller.js', () => {
         _id: 'user-001',
         id: 'user-001',
         name: 'Aayan',
-        email: 'aayan@example.com'
+        email: 'aayan@example.com',
       },
       settings: {
         _id: 'settings-001',
         user: 'user-001',
-        dailyLimitMinutes: 180
-      }
+        dailyLimitMinutes: 180,
+      },
     });
   });
 });
